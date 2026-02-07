@@ -4,42 +4,46 @@ Modular reinforcement-learning environments for **UR5e** and **UR3e** robot arms
 in [MuJoCo](https://mujoco.readthedocs.io/), with [Gymnasium](https://gymnasium.farama.org/)
 wrappers for training and keyboard/gamepad teleop for interactive testing.
 
+<p align="center">
+  <img src="docs/images/reach_ur5e.png" alt="UR5e Reach Environment" width="100%"/>
+</p>
+<p align="center"><em>UR5e reach task — top, side, and end-effector camera views</em></p>
+
 ---
 
 ## 📁 Project Structure
 
 ```
 mujoco-robot/
-├── mujoco_robot/                 # Main Python package
-│   ├── __init__.py               # Package root (version, top-level imports)
-│   ├── robots/                   # Robot models & configuration
-│   │   ├── configs.py            # RobotConfig dataclass + registry
-│   │   ├── ur5e.xml              # UR5e MJCF (dual-geom collision)
-│   │   └── ur3e.xml              # UR3e MJCF (dual-geom collision)
-│   ├── core/                     # Reusable engine modules
-│   │   ├── ik_controller.py      # Damped-least-squares IK solver
-│   │   ├── collision.py          # Self-collision detector
-│   │   └── xml_builder.py        # MJCF XML injection utilities
-│   ├── envs/                     # Gymnasium-ready environments
-│   │   ├── reach_env.py          # URReachEnv + ReachGymnasium
-│   │   └── slot_sorter_env.py    # URSlotSorterEnv + SlotSorterGymnasium
-│   ├── training/                 # RL training utilities
-│   │   ├── callbacks.py          # BestEpisodeVideoCallback (SB3)
-│   │   ├── train_reach.py        # PPO training for reach task
-│   │   └── train_slot_sorter.py  # PPO training for slot sorter
-│   └── teleop/                   # Interactive controllers
-│       ├── keyboard.py           # Keyboard teleop (both tasks)
-│       └── gamepad.py            # DualShock/DualSense gamepad
-├── scripts/                      # CLI entry points
-│   ├── teleop.py                 # Unified teleop launcher
-│   ├── train.py                  # Unified training launcher
-│   └── visual_smoke.py           # Scripted rollout video
-├── tests/                        # Pytest suite
-│   ├── test_reach_env.py         # 11 reach-env tests
-│   └── test_slot_sorter.py       # 3 slot-sorter tests
-├── assets/                       # Original XML files (kept for reference)
-├── pyproject.toml                # Package metadata & dependencies
-└── README.md                     # This file
+├── src/mujoco_robot/               # Main Python package
+│   ├── __init__.py
+│   ├── robots/                     # Robot models & configuration
+│   │   ├── configs.py              # RobotConfig dataclass + registry
+│   │   ├── ur5e.xml                # UR5e MJCF (Menagerie OBJ meshes)
+│   │   ├── ur3e.xml                # UR3e MJCF (scaled UR5e meshes)
+│   │   └── assets/ur5e/            # 20 OBJ mesh files
+│   ├── core/                       # Reusable engine modules
+│   │   ├── ik_controller.py        # Damped-least-squares IK solver
+│   │   ├── collision.py            # Self-collision detector
+│   │   └── xml_builder.py          # MJCF XML injection utilities
+│   ├── envs/                       # Gymnasium-ready environments
+│   │   ├── reach_env.py            # URReachEnv + ReachGymnasium
+│   │   └── slot_sorter_env.py      # URSlotSorterEnv + SlotSorterGymnasium
+│   ├── training/                   # RL training utilities
+│   │   ├── callbacks.py            # BestEpisodeVideoCallback (SB3)
+│   │   ├── train_reach.py          # PPO training for reach task
+│   │   └── train_slot_sorter.py    # PPO training for slot sorter
+│   ├── teleop/                     # Interactive controllers
+│   │   ├── keyboard.py             # Keyboard teleop (both tasks)
+│   │   └── gamepad.py              # DualShock/DualSense gamepad
+│   └── scripts/                    # CLI entry points
+│       ├── teleop.py               # Unified teleop launcher
+│       ├── train.py                # Unified training launcher
+│       └── visual_smoke.py         # Scripted rollout video
+├── docs/images/                    # README screenshots
+├── pyproject.toml                  # Package metadata & dependencies
+├── .gitignore
+└── README.md
 ```
 
 ---
@@ -132,6 +136,26 @@ print(f"EE pos: {result.info['ee_pos']}, dist: {result.info['dist']:.3f}")
 
 ---
 
+## 🖼️ Environments
+
+### Reach Task
+
+Move the end-effector to a random 3-D goal (translucent red sphere). One goal per episode — the episode terminates on success or time-out.
+
+| UR5e | UR3e |
+|------|------|
+| ![UR5e Reach](docs/images/reach_ur5e.png) | ![UR3e Reach](docs/images/reach_ur3e.png) |
+
+### Slot Sorter Task
+
+Pick up coloured objects and place them into matching slots.
+
+<p align="center">
+  <img src="docs/images/slot_sorter.png" alt="Slot Sorter Environment" width="60%"/>
+</p>
+
+---
+
 ## 🏗️ Architecture
 
 ### Robot Models (dual-geom collision)
@@ -146,7 +170,7 @@ Each robot MJCF uses a **dual-geom architecture** for robust collision handling:
 
 | Environment | Action Dim | Obs Dim | Description |
 |-------------|-----------|---------|-------------|
-| `URReachEnv` | 4 | 20 | Move EE to random 3-D goals |
+| `URReachEnv` | 4 | 23 | Move EE to random 3-D goals |
 | `URSlotSorterEnv` | 5 | 71 | Pick colored objects → matching slots |
 
 Both environments use:

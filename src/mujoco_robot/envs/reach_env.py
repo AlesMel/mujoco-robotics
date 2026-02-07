@@ -99,12 +99,13 @@ class ReachGymnasium(gymnasium.Env):
 
     def step(self, action):
         res: StepResult = self.base.step(action)
+        reached = res.info.get("reached", False)
         time_up = (
             self.base.time_limit > 0
             and self.base.step_id >= self.base.time_limit
         )
-        terminated = False
-        truncated = time_up
+        terminated = reached
+        truncated = time_up and not reached
         return res.obs.astype(np.float32), res.reward, terminated, truncated, res.info
 
     def render(self):
@@ -144,10 +145,10 @@ class URReachEnv:
         → total = 23
 
     Reward:
-        Dense shaping: distance improvement + proximity bonus + time
-        penalty + collision penalty.  On reaching the goal a large bonus
-        is given and a **new goal** is spawned — the episode continues
-        until the time limit.
+        Dense shaping: ``1 − dist/init_dist`` (normalised to [0, 1]) minus
+        a small time penalty and collision penalty.  A +5 bonus is given
+        when the goal is reached.  Each episode has **one goal** and
+        terminates on success or time-out.
 
     Parameters
     ----------
@@ -179,7 +180,6 @@ class URReachEnv:
         ee_step: float = 0.06,
         yaw_step: float = 0.5,
         reach_threshold: float = 0.06,
-        reach_steps_required: int = 5,
         render_size: Tuple[int, int] = (960, 720),
         seed: Optional[int] = None,
     ) -> None:
@@ -197,7 +197,6 @@ class URReachEnv:
         self.ee_step = ee_step
         self.yaw_step = yaw_step
         self.reach_threshold = reach_threshold
-        self.reach_steps_required = reach_steps_required
         self.render_size = render_size
 
         # Physics / control tuning
@@ -291,7 +290,7 @@ class URReachEnv:
         self._last_targets = self.init_q.copy()
         self.goal_pos = np.zeros(3)
         self.step_id = 0
-        self._reach_counter = 0
+        self._init_dist = 1.0
         self._goals_reached = 0
 
     # -------------------------------------------------------------- Properties
@@ -317,7 +316,6 @@ class URReachEnv:
 
         mujoco.mj_resetData(self.model, self.data)
         self.step_id = 0
-        self._reach_counter = 0
         self._goals_reached = 0
         self._last_targets = self.init_q.copy()
 
@@ -341,6 +339,7 @@ class URReachEnv:
         for _ in range(self.settle_steps):
             mujoco.mj_step(self.model, self.data)
 
+        self._init_dist = self._ee_goal_dist()
         return self._observe()
 
     def _sample_goal(self) -> np.ndarray:
@@ -418,46 +417,38 @@ class URReachEnv:
     # -------------------------------------------------------------- Reward
     def _compute_reward(self) -> Tuple[float, bool, Dict]:
         dist = self._ee_goal_dist()
+        reached = dist < self.reach_threshold
 
-        if dist < self.reach_threshold:
-            self._reach_counter += 1
-        else:
-            self._reach_counter = 0
-        just_reached = self._reach_counter >= self.reach_steps_required
+        # ---- Simple, PPO-friendly dense reward ----
+        # Normalise distance by initial distance so reward is always in
+        # a comparable range regardless of where the goal was sampled.
+        normed = dist / max(self._init_dist, 1e-6)
+        reward = 1.0 - normed                       # 1.0 at goal, ≤0 far away
 
-        # ---- Stable, PPO-friendly reward ----
-        # 1. Negative distance  — always pushes toward the goal,
-        #    no spikes from delta-distance or goal resampling.
-        reward = -dist
+        # Small time penalty — encourages reaching quickly
+        reward -= 0.005
 
-        # 2. Exponential proximity bonus — ramps up sharply near goal
-        reward += math.exp(-20.0 * dist)            # ≈1.0 at dist=0
-
-        # 3. Small time penalty to encourage speed
-        reward -= 0.01
-
-        # 4. Self-collision penalty
+        # Self-collision penalty
         if self._self_collision_count > 0:
-            reward -= 1.0
+            reward -= 0.5
 
-        # 5. Large bonus + new goal on reaching
-        if just_reached:
-            reward += 10.0
+        # Reach bonus + terminate episode
+        if reached:
+            reward += 5.0
             self._goals_reached += 1
-            self.goal_pos = self._sample_goal()
-            self._place_goal_marker(self.goal_pos)
-            self._reach_counter = 0
+
+        time_up = self.time_limit > 0 and self.step_id >= self.time_limit
+        done = reached or time_up
 
         info = {
-            "dist": self._ee_goal_dist() if just_reached else dist,
-            "reached": just_reached,
+            "dist": dist,
+            "reached": reached,
             "goals_reached": self._goals_reached,
-            "reach_counter": self._reach_counter,
             "self_collisions": self._self_collision_count,
             "ee_pos": self.data.site_xpos[self.ee_site].copy(),
             "goal_pos": self.goal_pos.copy(),
+            "is_success": reached,
         }
-        done = self.time_limit > 0 and self.step_id >= self.time_limit
         return float(reward), done, info
 
     # -------------------------------------------------------------- Step
