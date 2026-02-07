@@ -1,0 +1,165 @@
+"""Stable-Baselines3 callbacks for periodic video recording.
+
+Usage::
+
+    from mujoco_robot.training import BestEpisodeVideoCallback
+
+    video_cb = BestEpisodeVideoCallback(
+        make_eval_env=lambda: Monitor(ReachGymnasium(render=True)),
+        save_every_timesteps=50_000,
+        video_dir="videos",
+        env_name="reach_ur5e",
+    )
+    model.learn(total_timesteps=500_000, callback=[video_cb])
+"""
+from __future__ import annotations
+
+import time
+from datetime import datetime
+from pathlib import Path
+from typing import Callable
+
+import gymnasium
+import imageio.v3 as iio
+import numpy as np
+from stable_baselines3.common.callbacks import BaseCallback
+from stable_baselines3.common.monitor import Monitor
+from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
+
+
+class BestEpisodeVideoCallback(BaseCallback):
+    """Records a video of the best-return eval episode every *N* training episodes.
+
+    Videos are saved into ``<video_dir>/<env_name>/<timestamp>/`` so that
+    different environments and training runs each get their own subfolder.
+
+    Parameters
+    ----------
+    make_eval_env : callable
+        Zero-arg factory that returns a Gymnasium env with rendering.
+    save_every_timesteps : int
+        Training timesteps between video recordings.
+    video_dir : str
+        Root directory for video output.
+    env_name : str
+        Sub-folder name (e.g. ``"reach_ur5e"``).
+    deterministic : bool
+        Whether to use deterministic policy during eval.
+    vec_norm : VecNormalize | None
+        Training VecNormalize whose obs/ret statistics are copied for eval.
+    verbose : int
+        Verbosity level.
+    """
+
+    def __init__(
+        self,
+        make_eval_env: Callable[[], gymnasium.Env],
+        save_every_timesteps: int,
+        video_dir: str = "videos",
+        env_name: str = "default",
+        deterministic: bool = True,
+        vec_norm: VecNormalize | None = None,
+        verbose: int = 1,
+    ):
+        super().__init__(verbose)
+        self.make_eval_env = make_eval_env
+        self.save_every_timesteps = max(1, save_every_timesteps)
+        run_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.video_dir = Path(video_dir) / env_name / run_stamp
+        self.deterministic = deterministic
+        self.vec_norm = vec_norm
+        self.best_return = -np.inf
+        self.next_record = self.save_every_timesteps
+
+    def _init_callback(self) -> None:
+        self.video_dir.mkdir(parents=True, exist_ok=True)
+
+    def _on_step(self) -> bool:
+        if self.num_timesteps >= self.next_record:
+            self._record_eval_episode()
+            self.next_record += self.save_every_timesteps
+        return True
+
+    def _record_eval_episode(self) -> None:
+        if self.vec_norm is not None:
+            raw_eval = DummyVecEnv([self.make_eval_env])
+            env: gymnasium.Env = VecNormalize(
+                raw_eval,
+                training=False,
+                norm_obs=self.vec_norm.norm_obs,
+                norm_reward=False,
+                clip_obs=self.vec_norm.clip_obs,
+            )
+            env.obs_rms = self.vec_norm.obs_rms.copy()
+            if self.vec_norm.ret_rms is not None:
+                env.ret_rms = self.vec_norm.ret_rms.copy()
+        else:
+            env = self.make_eval_env()
+
+        obs = env.reset()
+        if isinstance(obs, tuple):
+            obs = obs[0]
+
+        frames = []
+        ep_return = 0.0
+        done = False
+        while not done:
+            action, _ = self.model.predict(obs, deterministic=self.deterministic)
+            step_out = env.step(action)
+
+            if len(step_out) == 5:
+                obs, reward, terminated, truncated, _ = step_out
+                if isinstance(reward, np.ndarray):
+                    ep_return += float(reward[0])
+                    done = bool(terminated[0] or truncated[0])
+                else:
+                    ep_return += reward
+                    done = bool(terminated or truncated)
+            else:
+                obs, reward, dones, _infos = step_out
+                if isinstance(reward, np.ndarray):
+                    ep_return += float(reward[0])
+                    done = bool(dones[0])
+                else:
+                    ep_return += reward
+                    done = bool(dones)
+
+            frame = env.render()
+            if frame is not None:
+                frames.append(frame)
+        env.close()
+
+        # Derive FPS from env control period
+        control_dt = 0.01
+        try:
+            base_env = None
+            if hasattr(env, "venv") and hasattr(env.venv, "envs"):
+                base_env = env.venv.envs[0]
+            elif hasattr(env, "envs"):
+                base_env = env.envs[0]
+            if base_env is not None and hasattr(base_env, "env"):
+                base_env = base_env.env
+            if base_env is not None and hasattr(base_env, "base"):
+                ue = base_env.base
+                control_dt = float(ue.model.opt.timestep) * float(ue.n_substeps)
+        except Exception:
+            pass
+        fps = max(1, int(round(1.0 / control_dt)))
+
+        ts = int(time.time())
+        fname = self.video_dir / f"eval_step_{self.num_timesteps:09d}_{ts}.mp4"
+        if frames:
+            iio.imwrite(fname, frames, fps=fps)
+            if self.verbose:
+                print(f"[video] saved eval episode to {fname} "
+                      f"(return {ep_return:.3f}, fps={fps})")
+
+        if ep_return > self.best_return and frames:
+            self.best_return = ep_return
+            best_fname = self.video_dir / "best_episode_latest.mp4"
+            iio.imwrite(best_fname, frames, fps=fps)
+            self.logger.record("eval/best_return", float(self.best_return))
+            self.logger.record("eval/best_video", str(best_fname))
+            if self.verbose:
+                print(f"[video] new best return {ep_return:.3f}, "
+                      f"updated {best_fname} (fps={fps})")

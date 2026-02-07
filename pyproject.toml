@@ -1,0 +1,50 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mujoco-robot"
+version = "0.1.0"
+description = "MuJoCo RL environments for UR robot arms — reach and slot-sorter tasks."
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+    {name = "mujoco-robot contributors"},
+]
+
+dependencies = [
+    "mujoco>=3.1",
+    "numpy",
+    "gymnasium>=1.0",
+]
+
+[project.optional-dependencies]
+train = [
+    "stable-baselines3>=2.0",
+    "imageio[ffmpeg]",
+    "tensorboard",
+]
+gamepad = [
+    "pygame",
+]
+dev = [
+    "pytest>=7.0",
+    "mujoco-robot[train,gamepad]",
+]
+
+[project.scripts]
+mr-teleop = "mujoco_robot.scripts.teleop:main"
+mr-train  = "mujoco_robot.scripts.train:main"
+mr-smoke  = "mujoco_robot.scripts.visual_smoke:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+namespaces = false
+
+[tool.setuptools.package-data]
+"mujoco_robot.robots" = ["*.xml", "assets/**/*.obj"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]

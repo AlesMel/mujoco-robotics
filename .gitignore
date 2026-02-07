@@ -1,0 +1,38 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+dist/
+build/
+*.whl
+
+# --- Virtual environments ---
+.venv/
+venv/
+env/
+
+# --- Training artifacts ---
+runs/
+videos/
+logs/
+tensorboard/
+*.zip
+*.pkl
+*.pt
+*.pth
+*.onnx
+
+# --- Temporary / test files ---
+test_quat.py
+
+# --- IDE / editor ---
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# --- OS ---
+Thumbs.db
+.DS_Store
