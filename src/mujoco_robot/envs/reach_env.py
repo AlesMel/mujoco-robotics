@@ -343,21 +343,39 @@ class URReachEnv:
         return self._observe()
 
     def _sample_goal(self) -> np.ndarray:
-        """Sample a random reachable goal position."""
+        """Sample a random reachable goal position.
+
+        The goal must satisfy all constraints from the robot config:
+        - Within ``goal_bounds`` box
+        - Between ``goal_distance`` (min, max) from the robot base
+        - Above ``goal_min_height`` (prevents folding onto table)
+        - At least ``goal_min_ee_dist`` from the current EE position
+        """
+        cfg = get_robot_config(self.robot)
         ee_pos = self.data.site_xpos[self.ee_site].copy()
-        for _ in range(200):
+        min_base, max_base = cfg.goal_distance
+        min_height = cfg.goal_min_height
+        min_ee = cfg.goal_min_ee_dist
+
+        for _ in range(500):
             goal = np.array([
                 self._rng.uniform(self.goal_bounds[0, 0], self.goal_bounds[0, 1]),
                 self._rng.uniform(self.goal_bounds[1, 0], self.goal_bounds[1, 1]),
                 self._rng.uniform(self.goal_bounds[2, 0], self.goal_bounds[2, 1]),
             ])
-            dist_from_base = np.linalg.norm(goal - self._BASE_POS)
-            if dist_from_base > self._TOTAL_REACH * 0.95:
+            # Too low — arm can just collapse onto it
+            if goal[2] < min_height:
                 continue
-            if np.linalg.norm(goal - ee_pos) < max(0.15, self.reach_threshold * 6):
+            # Too close / too far from base
+            dist_from_base = np.linalg.norm(goal - self._BASE_POS)
+            if dist_from_base < min_base or dist_from_base > max_base:
+                continue
+            # Too close to current EE — trivial reach
+            if np.linalg.norm(goal - ee_pos) < min_ee:
                 continue
             return goal
-        return np.array([0.1, 0.0, 0.95])
+        # Fallback — safe position in front of the robot
+        return self._BASE_POS + np.array([0.25, 0.0, 0.30])
 
     def _place_goal_marker(self, pos: np.ndarray) -> None:
         """Move the goal sphere to the desired position."""

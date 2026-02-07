@@ -7,6 +7,9 @@ Each robot entry contains:
     init_q        — collision-free home joint angles
     goal_bounds   — workspace volume for goal sampling [3 x 2]
     ee_bounds     — hard EE position clamps [3 x 2]
+    goal_distance — (min, max) distance from base for goal sampling
+    goal_min_height — minimum Z for goals (prevents folding onto table)
+    goal_min_ee_dist — minimum distance from current EE (prevents trivial starts)
 
 To add a new robot, create an MJCF in ``mujoco_robot/robots/`` and register
 it here.
@@ -15,7 +18,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Tuple
 
 import numpy as np
 
@@ -36,6 +39,9 @@ class RobotConfig:
     init_q: np.ndarray
     goal_bounds: np.ndarray   # (3, 2) — [axis, lo/hi]
     ee_bounds: np.ndarray     # (3, 2)
+    goal_distance: Tuple[float, float] = (0.20, 0.90)  # (min, max) from base
+    goal_min_height: float = 0.82   # min Z — above table surface
+    goal_min_ee_dist: float = 0.15  # min distance from current EE
 
     @property
     def total_reach(self) -> float:
@@ -66,6 +72,10 @@ ROBOT_CONFIGS: Dict[str, RobotConfig] = {
             [-0.80, 0.80],
             [ 0.50, 1.85],
         ]),
+        # Goal must be 25–80 cm from base, ≥85 cm high, ≥20 cm from EE
+        goal_distance=(0.25, 0.80),
+        goal_min_height=0.85,
+        goal_min_ee_dist=0.20,
     ),
     "ur3e": RobotConfig(
         name="ur3e",
@@ -87,6 +97,10 @@ ROBOT_CONFIGS: Dict[str, RobotConfig] = {
             [-0.50, 0.50],
             [ 0.60, 1.45],
         ]),
+        # Goal must be 15–45 cm from base, ≥85 cm high, ≥12 cm from EE
+        goal_distance=(0.15, 0.45),
+        goal_min_height=0.85,
+        goal_min_ee_dist=0.12,
     ),
 }
 
