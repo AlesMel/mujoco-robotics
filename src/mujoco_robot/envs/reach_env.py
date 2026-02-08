@@ -75,37 +75,67 @@ class StepResult:
 class ReachGymnasium(gymnasium.Env):
     """Gymnasium-compliant wrapper around :class:`URReachEnv`.
 
+    Works with **any** Gymnasium-compatible RL library (Stable-Baselines3,
+    CleanRL, RLlib, rl_games, …).  Also registered as
+    ``"MuJoCoRobot/Reach-v0"`` so you can use::
+
+        import gymnasium
+        import mujoco_robot  # registers envs
+        env = gymnasium.make("MuJoCoRobot/Reach-v0", robot="ur3e")
+
+    Or instantiate directly::
+
+        from mujoco_robot.envs import ReachGymnasium
+        env = ReachGymnasium(robot="ur3e", render_mode="rgb_array")
+
+    All keyword arguments are forwarded to :class:`URReachEnv`, so you
+    can tune *any* environment parameter from one place::
+
+        env = ReachGymnasium(
+            robot="ur3e",
+            reach_threshold=0.05,
+            yaw_threshold=0.35,
+            hold_seconds=2.0,
+        )
+
     Parameters
     ----------
     robot : str
         Robot model name (``"ur5e"`` or ``"ur3e"``).
     seed : int | None
         Random seed for reproducibility.
-    render : bool
-        If ``True``, use high-resolution rendering (for video capture).
+    render_mode : str | None
+        ``"rgb_array"`` for video capture, ``None`` for headless.
     time_limit : int
         Maximum steps per episode (0 = unlimited).
     action_mode : str
         ``"cartesian"`` (4-D IK) or ``"joint"`` (6-D joint offsets).
+    **env_kwargs
+        Any extra keyword arguments are forwarded directly to
+        :class:`URReachEnv` (e.g. ``reach_threshold``, ``hold_seconds``).
     """
 
-    metadata = {"render_modes": ["rgb_array", "human"]}
+    metadata = {"render_modes": ["rgb_array"]}
 
     def __init__(
         self,
         robot: str = "ur5e",
         seed: int | None = None,
-        render: bool = False,
-        time_limit: int = 1000,
-        action_mode: str = "cartesian",
+        render_mode: str | None = None,
+        time_limit: int = 375,
+        action_mode: str = "joint",
+        **env_kwargs,
     ):
         super().__init__()
+        self.render_mode = render_mode
+        high_res = render_mode == "rgb_array"
         self.base = URReachEnv(
             robot=robot,
-            render_size=(160, 120) if not render else (640, 480),
+            render_size=(160, 120) if not high_res else (640, 480),
             time_limit=time_limit,
             seed=seed,
             action_mode=action_mode,
+            **env_kwargs,
         )
         self.action_space = gymnasium.spaces.Box(
             -1.0, 1.0, shape=(self.base.action_dim,), dtype=np.float32
@@ -113,7 +143,6 @@ class ReachGymnasium(gymnasium.Env):
         self.observation_space = gymnasium.spaces.Box(
             -np.inf, np.inf, shape=(self.base.observation_dim,), dtype=np.float32
         )
-        self.render_mode = "rgb_array" if render else None
 
     def reset(self, *, seed: int | None = None, options=None):
         obs = self.base.reset(seed=seed)
@@ -121,13 +150,15 @@ class ReachGymnasium(gymnasium.Env):
 
     def step(self, action):
         res: StepResult = self.base.step(action)
-        reached = res.info.get("reached", False)
         time_up = (
             self.base.time_limit > 0
             and self.base.step_id >= self.base.time_limit
         )
-        terminated = reached
-        truncated = time_up and not reached
+        # Isaac Lab style: no success termination.  Goals resample
+        # only after the EE holds at the goal; only time-out ends
+        # the episode.
+        terminated = False
+        truncated = time_up
         return res.obs.astype(np.float32), res.reward, terminated, truncated, res.info
 
     def render(self):
@@ -171,11 +202,13 @@ class URReachEnv:
         → total = 29 (cartesian) or 31 (joint)
 
     Reward:
-        Dense exponential shaping based on proximity and yaw alignment.
-        ``0.6 * exp(-5·dist) + 0.4 * exp(-1·|yaw_err|)``
-        with time penalty, collision penalty, action-rate penalty,
-        and a +10 bonus when both position and yaw thresholds are met.
-        One goal per episode, terminates on success or time-out.
+        Isaac Lab style dense shaping with **hold-then-resample**:
+        ``-0.2 * dist + 0.1 * tanh(1 - dist/0.1) - 0.1 * |yaw_err|``
+        with curriculum-ramped action-rate and joint-velocity penalties
+        and a collision penalty.  Goals are resampled only when the
+        end-effector reaches the goal (within ``reach_threshold`` and
+        ``yaw_threshold``) **and** holds there for ``hold_seconds``.
+        The episode only ends on time-out.
 
     Parameters
     ----------
@@ -192,11 +225,18 @@ class URReachEnv:
     yaw_step : float
         EE yaw step size per action unit (radians). Cartesian only.
     joint_action_scale : float
-        Scaling factor for joint-position offsets. Joint mode only.
+        Scaling factor for joint-position offsets (radians). Joint mode only.
+        Default 0.5 matches Isaac Lab's joint-position action scale.
     reach_threshold : float
-        Distance threshold to count as "reached" (metres).
+        Distance (metres) within which the EE is considered to have
+        reached the goal position.  Default 0.02 (2 cm).
     yaw_threshold : float
-        Yaw error threshold to count as "reached" (radians).
+        Yaw error (radians) within which orientation is considered
+        matched.  Default 0.35 (~20°).
+    hold_seconds : float
+        Time (seconds) the EE must stay within both thresholds
+        before the goal is resampled.  At ~31 Hz this is converted
+        to an integer step count.  Default 2.0.
     obs_noise : float
         Uniform observation noise amplitude (applied to proprioception).
     action_rate_weight : float
@@ -211,15 +251,19 @@ class URReachEnv:
         self,
         robot: str = "ur5e",
         model_path: Optional[str] = None,
-        time_limit: int = 1000,
+        time_limit: int = 375,
         action_mode: str = "cartesian",
         ee_step: float = 0.06,
         yaw_step: float = 0.5,
-        joint_action_scale: float = 0.5,
-        reach_threshold: float = 0.06,
+        joint_action_scale: float = 0.125,
+        reach_threshold: float = 0.05,
         yaw_threshold: float = 0.35,
+        hold_seconds: float = 2.0,
         obs_noise: float = 0.01,
-        action_rate_weight: float = 0.005,
+        action_rate_weight: float = 0.0001,
+        joint_vel_weight: float = 0.0001,
+        randomize_init: bool = True,
+        init_q_range: Tuple[float, float] = (0.75, 1.25),
         render_size: Tuple[int, int] = (960, 720),
         seed: Optional[int] = None,
     ) -> None:
@@ -242,17 +286,35 @@ class URReachEnv:
         self.ee_step = ee_step
         self.yaw_step = yaw_step
         self.joint_action_scale = joint_action_scale
-        self.reach_threshold = reach_threshold
-        self.yaw_threshold = yaw_threshold
         self.obs_noise = obs_noise
         self.action_rate_weight = action_rate_weight
+        self.joint_vel_weight = joint_vel_weight
+        self.randomize_init = randomize_init
+        self.init_q_range = init_q_range
         self.render_size = render_size
 
+        # Hold-then-resample: the EE must reach the goal AND hold
+        # there for ``hold_seconds`` before a new goal is sampled.
+        self.reach_threshold = reach_threshold
+        self.yaw_threshold = yaw_threshold
+        control_dt = 0.002 * 16  # timestep × n_substeps
+        self.hold_steps = max(1, int(round(hold_seconds / control_dt)))
+        self._hold_counter = 0      # counts steps spent inside thresholds
+        self._holding = False        # True while EE is inside thresholds
+
+        # Curriculum targets (Isaac Lab style — ramp penalties over training)
+        self._action_rate_target = 0.005
+        self._joint_vel_target = 0.001
+        self._curriculum_steps = 4500  # iterations to reach target weights
+        self._total_episodes = 0
+
         # Physics / control tuning
+        # n_substeps=16 with dt=0.002 → control_dt=0.032s → ~31 Hz,
+        # matching Isaac Lab's decimation=2 at sim_dt=1/60 (~30 Hz).
         self.max_joint_vel = 4.0
         self.ik_damping = 0.02
         self.hold_eps = 0.05
-        self.n_substeps = 5
+        self.n_substeps = 16
         self.settle_steps = 300
 
         # Robot-specific home pose and workspace bounds
@@ -262,7 +324,9 @@ class URReachEnv:
 
         # ---- Build MuJoCo model ----
         robot_xml = load_robot_xml(self.model_path)
-        self.model_xml = build_reach_xml(robot_xml, render_size, reach_threshold)
+        # marker_size controls visual goal marker dimensions only (cosmetic)
+        marker_size = 0.06
+        self.model_xml = build_reach_xml(robot_xml, render_size, marker_size)
         self.model = mujoco.MjModel.from_xml_string(self.model_xml)
         self.data = mujoco.MjData(self.model)
 
@@ -309,10 +373,10 @@ class URReachEnv:
             for j in self.robot_joints
         ]
 
-        # Increase passive damping for stability
+        # Light passive damping (PD controller handles most stabilisation)
         for dof in self.robot_dofs:
-            self.model.dof_damping[dof] = max(self.model.dof_damping[dof], 8.0)
-            self.model.dof_frictionloss[dof] = max(self.model.dof_frictionloss[dof], 0.5)
+            self.model.dof_damping[dof] = max(self.model.dof_damping[dof], 2.0)
+            self.model.dof_frictionloss[dof] = max(self.model.dof_frictionloss[dof], 0.1)
 
         # --- Self-collision detection ---
         self._collision_detector = CollisionDetector(self.model)
@@ -372,22 +436,41 @@ class URReachEnv:
         mujoco.mj_resetData(self.model, self.data)
         self.step_id = 0
         self._goals_reached = 0
+        self._hold_counter = 0
+        self._holding = False
         self._last_targets = self.init_q.copy()
         self._last_action = np.zeros(self.action_dim, dtype=np.float32)
         self._prev_action = np.zeros(self.action_dim, dtype=np.float32)
 
-        # Set robot to home pose
+        # Set robot to home pose (with optional randomization — Isaac Lab style)
+        self._total_episodes += 1
         for qi, j in enumerate(self.robot_joints):
             jid = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, j)
-            self.data.qpos[self.model.jnt_qposadr[jid]] = self.init_q[qi]
+            q_home = self.init_q[qi]
+            if self.randomize_init:
+                scale = float(self._rng.uniform(*self.init_q_range))
+                q_home = q_home * scale
+                # Clamp to joint limits
+                lo, hi = self.model.jnt_range[jid]
+                if lo < hi:
+                    q_home = float(np.clip(q_home, lo, hi))
+            self.data.qpos[self.model.jnt_qposadr[jid]] = q_home
             self.data.qvel[self.model.jnt_dofadr[jid]] = 0.0
             act_id = mujoco.mj_name2id(
                 self.model, mujoco.mjtObj.mjOBJ_ACTUATOR, f"{j}_motor"
             )
             if act_id != -1:
-                self.data.ctrl[act_id] = self.init_q[qi]
+                self.data.ctrl[act_id] = q_home
+        # Update last targets to match randomized start
+        for qi, j in enumerate(self.robot_joints):
+            jid = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, j)
+            self._last_targets[qi] = self.data.qpos[self.model.jnt_qposadr[jid]]
 
         mujoco.mj_forward(self.model, self.data)
+
+        # Anchor the IK yaw target to the current (home) yaw so that
+        # pure-translation commands don't drift the heading.
+        self._target_yaw = self._ee_yaw()
 
         # Sample goal — must be reachable and not too close to current EE
         self.goal_pos = self._sample_goal()
@@ -460,8 +543,10 @@ class URReachEnv:
         pos = self.data.site_xpos[self.ee_site].copy() + delta_xyz
         for i in range(3):
             pos[i] = float(np.clip(pos[i], self.ee_bounds[i, 0], self.ee_bounds[i, 1]))
-        yaw = self._ee_yaw() + dyaw
-        return pos, yaw
+        # Update persistent yaw target — pure translation (dyaw=0) keeps
+        # the heading anchored instead of following kinematic drift.
+        self._target_yaw = self._target_yaw + dyaw
+        return pos, self._target_yaw
 
     def _ik_cartesian(self, target_pos: np.ndarray, target_yaw: float) -> np.ndarray:
         return self._ik.solve(target_pos, target_yaw)
@@ -530,59 +615,119 @@ class URReachEnv:
         return obs
 
     # -------------------------------------------------------------- Reward
+    def _curriculum_weight(self, base: float, target: float) -> float:
+        """Linearly ramp a penalty weight from *base* to *target* over training.
+
+        Mirrors Isaac Lab's ``modify_reward_weight`` curriculum term.
+        """
+        progress = min(1.0, self._total_episodes / max(1, self._curriculum_steps))
+        return base + (target - base) * progress
+
+    def _resample_goal(self) -> None:
+        """Sample a fresh goal and update the marker (mid-episode)."""
+        self.goal_pos = self._sample_goal()
+        self.goal_yaw = float(self._rng.uniform(-math.pi, math.pi))
+        self._place_goal_marker(self.goal_pos, self.goal_yaw)
+
     def _compute_reward(self) -> Tuple[float, bool, Dict]:
         dist = self._ee_goal_dist()
         yaw_err = abs(self._yaw_error())    # [0, π]
 
-        pos_ok = dist < self.reach_threshold
-        yaw_ok = yaw_err < self.yaw_threshold
-        reached = pos_ok and yaw_ok
+        # ══════════════════════════════════════════════════════════════
+        # Hold-then-resample
+        # ──────────────────────────────────────────────────────────────
+        # Resample a new goal only when the EE reaches the current
+        # goal (within reach_threshold & yaw_threshold) AND holds
+        # there for hold_steps consecutive steps.
+        # ══════════════════════════════════════════════════════════════
+        goal_resampled = False
+        inside = dist < self.reach_threshold and yaw_err < self.yaw_threshold
+        if inside:
+            self._hold_counter += 1
+            self._holding = True
+            if self._hold_counter >= self.hold_steps:
+                # Held long enough — resample!
+                self._hold_counter = 0
+                self._holding = False
+                self._goals_reached += 1
+                self._resample_goal()
+                goal_resampled = True
+        else:
+            # Gradual decay instead of hard reset — a brief drift
+            # doesn't throw away all hold progress.
+            self._hold_counter = max(0, self._hold_counter - 3)
+            self._holding = self._hold_counter > 0
 
-        # ---- Dense reward: exponential closeness (no init-dist dependency) ----
-        #
-        # Position: exp(-α·dist)   → 1.0 at goal, ~0.22 at 0.3m, ~0.05 at 0.6m
-        # Yaw:      exp(-β·|err|)  → 1.0 at match, ~0.37 at 1 rad
-        #
-        # This gives a smooth, consistent gradient regardless of episode-specific
-        # initial distances, and creates a strong "pull" near the goal.
-        pos_reward = math.exp(-5.0 * dist)           # range (0, 1]
-        yaw_reward = math.exp(-1.0 * yaw_err)        # range (0, 1]
+        # ---- Dense reward (Isaac Lab style) ----
+        # Position: negative L2 tracking + fine-grained tanh bonus
+        # Orientation: negative L1 yaw error
+        pos_reward_coarse = -0.2 * dist
+        pos_reward_fine = 0.1 * (1.0 - math.tanh(dist / 0.1))
+        yaw_reward = -0.1 * yaw_err
 
-        # Weight position higher until close, then yaw matters more
-        reward = 0.6 * pos_reward + 0.4 * yaw_reward
+        # ---- Hold bonus: reward for staying at the goal ----
+        # Makes "stay still at goal" strictly better than "oscillate near it"
+        if inside:
+            closeness = 1.0 - (dist / self.reach_threshold)
+            yaw_closeness = 1.0 - (yaw_err / self.yaw_threshold)
+            hold_bonus = 0.3 * closeness * yaw_closeness
+        else:
+            hold_bonus = 0.0
 
-        # Small time penalty to discourage dawdling
-        reward -= 0.01
+        # ---- Velocity damping near goal ----
+        # Penalise fast joint motion when close — teaches the policy
+        # to decelerate on approach instead of overshooting.
+        if dist < 0.1:
+            jvel_near = sum(self.data.qvel[d] ** 2 for d in self.robot_dofs)
+            proximity = 1.0 - (dist / 0.1)  # 0 at 10 cm, 1 at 0 cm
+            vel_damping = -0.05 * proximity * jvel_near
+        else:
+            vel_damping = 0.0
 
-        # Action rate penalty (Isaac Lab style — smooth motions)
+        reward = (
+            pos_reward_coarse
+            + pos_reward_fine
+            + yaw_reward
+            + hold_bonus
+            + vel_damping
+        )
+        # Action rate penalty (curriculum: 0.0001 → 0.005)
+        cur_ar_w = self._curriculum_weight(
+            self.action_rate_weight, self._action_rate_target
+        )
         action_delta = self._last_action - self._prev_action
-        reward -= self.action_rate_weight * float(np.dot(action_delta, action_delta))
+        reward -= cur_ar_w * float(np.dot(action_delta, action_delta))
+
+        # Joint velocity penalty (curriculum: 0.0001 → 0.001)
+        cur_jv_w = self._curriculum_weight(
+            self.joint_vel_weight, self._joint_vel_target
+        )
+        jvel_sq = 0.0
+        for dof in self.robot_dofs:
+            jvel_sq += self.data.qvel[dof] ** 2
+        reward -= cur_jv_w * jvel_sq
 
         # Self-collision penalty
         if self._self_collision_count > 0:
             reward -= 1.0
 
-        # Reach bonus (position + yaw)
-        if reached:
-            reward += 10.0
-            self._goals_reached += 1
-
+        # Episode ends only on time-out — never on success
         time_up = self.time_limit > 0 and self.step_id >= self.time_limit
-        done = reached or time_up
+        done = time_up
 
         info = {
             "dist": dist,
             "yaw_err": yaw_err,
-            "reached": reached,
-            "pos_ok": pos_ok,
-            "yaw_ok": yaw_ok,
+            "inside_threshold": inside,
+            "holding": self._holding,
+            "hold_progress": self._hold_counter / max(1, self.hold_steps),
+            "goal_resampled": goal_resampled,
             "goals_reached": self._goals_reached,
             "self_collisions": self._self_collision_count,
             "ee_pos": self.data.site_xpos[self.ee_site].copy(),
             "ee_yaw": self._ee_yaw(),
             "goal_pos": self.goal_pos.copy(),
             "goal_yaw": self.goal_yaw,
-            "is_success": reached,
         }
         return float(reward), done, info
 
@@ -606,14 +751,25 @@ class URReachEnv:
             raise ValueError(f"Expected action dim {self.action_dim}, got {act.shape[0]}")
         act = np.clip(act, -1.0, 1.0)
 
+        # ---- Action suppression when holding at goal ----
+        # If we're inside the threshold and accumulating hold time,
+        # dampen the action so the arm naturally stays put instead of
+        # overshooting.  The deeper into the hold phase, the stronger
+        # the suppression (scales from 0.3× to 0.05× over hold_steps).
+        if self._holding and self._hold_counter > 0:
+            hold_frac = min(1.0, self._hold_counter / max(1, self.hold_steps))
+            dampen = 0.3 * (1.0 - hold_frac) + 0.05 * hold_frac
+            act = act * dampen
+
         # Track actions for action-rate penalty
         self._prev_action = self._last_action.copy()
         self._last_action = act.astype(np.float32).copy()
 
         prev_targets = self._last_targets.copy()
+        prev_yaw = self._target_yaw
 
         if self.action_mode == "cartesian":
-            # --- Cartesian IK path (original) ---
+            # --- Cartesian IK path ---
             delta_pos = act[:3] * self.ee_step
             dyaw = act[3] * self.yaw_step
 
@@ -642,11 +798,17 @@ class URReachEnv:
         # Detect self-collision
         self._self_collision_count = self._collision_detector.count(self.data)
 
-        # Revert on collision
+        # Revert on collision — also zero velocities to prevent explosion
         if self._self_collision_count > 0:
             self._last_targets = prev_targets
+            self._target_yaw = prev_yaw
             for k, act_id in enumerate(self.robot_actuators):
                 self.data.ctrl[act_id] = prev_targets[k]
+            # Zero out joint velocities to prevent residual forces
+            for dof in self.robot_dofs:
+                self.data.qvel[dof] = 0.0
+            # Settle back to safe pose
+            mujoco.mj_forward(self.model, self.data)
             for _ in range(self.n_substeps):
                 mujoco.mj_step(self.model, self.data)
 

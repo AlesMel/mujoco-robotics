@@ -21,7 +21,7 @@
       <joint axis="0 1 0" range="-6.28319 6.28319" armature="0.1"/>
       <general gaintype="fixed" biastype="affine"
                ctrlrange="-6.2831 6.2831"
-               gainprm="2000" biasprm="0 -2000 -400"
+               gainprm="800" biasprm="0 -800 -40"
                forcerange="-150 150"/>
 
       <default class="size3">
@@ -31,7 +31,7 @@
         </default>
       </default>
       <default class="size1">
-        <general gainprm="500" biasprm="0 -500 -100"
+        <general gainprm="200" biasprm="0 -200 -20"
                  forcerange="-28 28"/>
       </default>
 

@@ -61,11 +61,12 @@ ROBOT_CONFIGS: Dict[str, RobotConfig] = {
         # Menagerie-style home — arm up, forearm horizontal, wrist down
         init_q=np.array([-np.pi, -np.pi / 2, np.pi / 2,
                          -np.pi / 2, -np.pi / 2, 0.0]),
-        # Goal sampling volume (world frame, above table, reachable)
+        # Goal sampling volume (world frame, above table, IN FRONT of arm)
+        # Base at x=−0.30, EE home at x≈+0.20 → goals span x∈[−0.10, 0.55]
         goal_bounds=np.array([
-            [-0.65, 0.15],   # x — centred on base at −0.30
-            [-0.40, 0.40],   # y
-            [ 0.80, 1.40],   # z — above table top (0.74)
+            [-0.10, 0.55],   # x — in front of base
+            [-0.35, 0.35],   # y — lateral spread
+            [ 0.85, 1.40],   # z — above table top (0.74)
         ]),
         ee_bounds=np.array([
             [-1.10, 0.60],
@@ -75,7 +76,7 @@ ROBOT_CONFIGS: Dict[str, RobotConfig] = {
         # Goal must be 25–80 cm from base, ≥85 cm high, ≥20 cm from EE
         goal_distance=(0.25, 0.80),
         goal_min_height=0.85,
-        goal_min_ee_dist=0.20,
+        goal_min_ee_dist=0.15,
     ),
     "ur3e": RobotConfig(
         name="ur3e",
@@ -86,11 +87,12 @@ ROBOT_CONFIGS: Dict[str, RobotConfig] = {
         # Menagerie-style home — arm up, forearm horizontal, wrist down
         init_q=np.array([-np.pi, -np.pi / 2, np.pi / 2,
                          -np.pi / 2, -np.pi / 2, 0.0]),
-        # Goal sampling volume (world frame, above table, reachable)
+        # Goal sampling volume (world frame, above table, IN FRONT of arm)
+        # Base at x=−0.15, EE home at x≈+0.15 → goals span x∈[−0.02, 0.35]
         goal_bounds=np.array([
-            [-0.40, 0.10],   # x — centred on base at −0.15
-            [-0.25, 0.25],   # y
-            [ 0.80, 1.15],   # z — above table top (0.74)
+            [-0.02, 0.35],   # x — in front of base
+            [-0.20, 0.20],   # y — lateral spread
+            [ 0.85, 1.10],   # z — above table top (0.74)
         ]),
         ee_bounds=np.array([
             [-0.65, 0.35],

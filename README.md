@@ -9,6 +9,9 @@ wrappers for training and keyboard/gamepad teleop for interactive testing.
 </p>
 <p align="center"><em>UR5e reach task — top, side, and end-effector camera views</em></p>
 
+<video src="videos/ik_hold/ik_hold_ur5e_20260208_102814.mp4" width="320" height="240" controls></video>
+
+
 ---
 
 ## 📁 Project Structure
@@ -35,7 +38,8 @@ mujoco-robot/
 │   │   └── train_slot_sorter.py    # PPO training for slot sorter
 │   ├── teleop/                     # Interactive controllers
 │   │   ├── keyboard.py             # Keyboard teleop (both tasks)
-│   │   └── gamepad.py              # DualShock/DualSense gamepad
+│   │   ├── gamepad.py              # DualShock/DualSense gamepad
+│   │   └── gui.py                  # Tkinter GUI with buttons & camera
 │   └── scripts/                    # CLI entry points
 │       ├── teleop.py               # Unified teleop launcher
 │       ├── train.py                # Unified training launcher
@@ -73,27 +77,60 @@ pip install -e ".[dev]"
 
 ```bash
 # Reach task with UR5e
-python scripts/teleop.py --task reach --robot ur5e
+python -m mujoco_robot.scripts.teleop --task reach --robot ur5e
 
 # Slot sorter
-python scripts/teleop.py --task slot_sorter
+python -m mujoco_robot.scripts.teleop --task slot_sorter
 
 # Slot sorter with gamepad
-python scripts/teleop.py --task slot_sorter --gamepad
+python -m mujoco_robot.scripts.teleop --task slot_sorter --gamepad
 ```
+
+### 3. Run teleop (GUI)
+
+```bash
+# GUI with clickable buttons, camera view, and joint readouts
+python -m mujoco_robot.scripts.teleop --task reach --robot ur5e --gui
+
+# Slot sorter GUI (includes grip button)
+python -m mujoco_robot.scripts.teleop --task slot_sorter --gui
+```
+
+The GUI provides:
+- **D-pad** arrow buttons for ±X / ±Y movement
+- **Z ± buttons** for vertical movement
+- **Yaw ↺ / ↻ buttons** for end-effector rotation
+- **Camera selector** dropdown — switch between **Top**, **Side**, and **End-Effector** views
+- **Coordinate frame toggle** — control in **Base (World)** frame or **End-Effector (Tool)** frame
+- **Live camera** view (selectable)
+- **Joint angle** bar displays with numeric readouts
+- **EE position & yaw** readout
+- **Speed slider** to control movement speed
+- **Reset** and **Emergency Stop** buttons
+- **Grip toggle** (slot sorter only)
+- Full **keyboard support** (W/A/S/D/R/F/Q/E/X/C/Tab) alongside the buttons
+
+**Coordinate frames:**
+
+| Frame | Behaviour |
+|-------|-----------|
+| 🌐 Base (World) | D-pad axes = fixed world X/Y. Default mode. |
+| 🔧 End-Effector (Tool) | D-pad "forward" follows the tool's heading. |
 
 **Keyboard controls:**
 
 | Key     | Action      |
 |---------|-------------|
-| W / S   | ±Y movement |
-| A / D   | ±X movement |
+| W / S   | ±Y movement (or Fwd / Back in EE frame) |
+| A / D   | ±X movement (or Left / Right in EE frame) |
 | R / F   | ±Z movement |
 | Q / E   | ±Yaw        |
+| C       | Cycle camera (top → side → ee_cam) |
+| Tab     | Toggle coordinate frame (Base ↔ EE) |
 | SPACE   | Grip toggle (slot sorter only) |
 | X       | Emergency stop |
 
-### 3. Train with PPO
+### 4. Train with PPO
 
 ```bash
 # Reach task (default: Cartesian IK actions)
@@ -111,12 +148,18 @@ tensorboard --logdir runs
 
 ### 4. Use as a Python library
 
-```python
-# Gymnasium API (compatible with SB3, CleanRL, etc.)
-from mujoco_robot.envs import ReachGymnasium
+The environment is a **fully standard [Gymnasium](https://gymnasium.farama.org/) environment**
+and works with **any** Gymnasium-compatible RL library — Stable-Baselines3, CleanRL,
+RLlib, rl_games, SKRL, and more.
 
-env = ReachGymnasium(robot="ur5e")  # Cartesian IK (4-D actions)
-# env = ReachGymnasium(robot="ur5e", action_mode="joint")  # Joint offsets (6-D)
+#### Via `gymnasium.make()` (recommended for portability)
+
+```python
+import gymnasium
+import mujoco_robot  # registers envs on import
+
+# Create the environment — works with ANY Gymnasium-compatible library
+env = gymnasium.make("MuJoCoRobot/Reach-v0", robot="ur3e")
 obs, info = env.reset()
 
 for _ in range(1000):
@@ -128,8 +171,49 @@ for _ in range(1000):
 env.close()
 ```
 
+#### Direct instantiation
+
 ```python
-# Low-level API (for custom loops / teleop)
+from mujoco_robot.envs import ReachGymnasium
+
+# All environment parameters are configurable via kwargs
+env = ReachGymnasium(
+    robot="ur5e",
+    render_mode="rgb_array",    # "rgb_array" for video, None for headless
+    action_mode="joint",        # "joint" (6-D) or "cartesian" (4-D IK)
+    reach_threshold=0.05,       # 5 cm position tolerance
+    yaw_threshold=0.35,         # ~20° yaw tolerance
+    hold_seconds=2.0,           # hold at goal 2 s before resample
+)
+obs, info = env.reset()
+obs, reward, terminated, truncated, info = env.step(env.action_space.sample())
+```
+
+#### Using different RL libraries
+
+```python
+# ── Stable-Baselines3 ───────────────────────────────────
+from stable_baselines3 import PPO, SAC, TD3
+import mujoco_robot
+
+env = gymnasium.make("MuJoCoRobot/Reach-v0", robot="ur3e")
+model = PPO("MlpPolicy", env)        # swap to SAC, TD3, etc.
+model.learn(total_timesteps=500_000)
+
+# ── CleanRL ──────────────────────────────────────────────
+# Uses gymnasium.make() directly — no changes needed.
+# python cleanrl/ppo_continuous_action.py --env-id MuJoCoRobot/Reach-v0
+
+# ── RLlib ────────────────────────────────────────────────
+from ray.rllib.algorithms.ppo import PPOConfig
+config = PPOConfig().environment("MuJoCoRobot/Reach-v0")
+algo = config.build()
+algo.train()
+```
+
+#### Low-level API (for custom loops / teleop)
+
+```python
 from mujoco_robot.envs import URReachEnv
 
 env = URReachEnv(robot="ur3e", time_limit=0)
@@ -138,13 +222,23 @@ result = env.step([0.5, 0.0, 0.0, 0.0])  # returns StepResult dataclass
 print(f"EE pos: {result.info['ee_pos']}, dist: {result.info['dist']:.3f}")
 ```
 
+#### Registered environments
+
+| Gymnasium ID | Class | Action Dim | Obs Dim | Description |
+|--------------|-------|-----------|---------|-------------|
+| `MuJoCoRobot/Reach-v0` | `ReachGymnasium` | 6 (joint) / 4 (cartesian) | 31 / 29 | Reach + hold goal pose |
+
 ---
 
 ## 🖼️ Environments
 
 ### Reach Task
 
-Move the end-effector to a random 3-D goal **position and yaw orientation** (red cube with RGB coordinate axes). The episode terminates when both the position and heading are matched, or on time-out.
+Move the end-effector to a random 3-D goal **position and yaw orientation**
+(red cube with RGB coordinate axes).  Goals spawn **in front** of the robot
+in the reachable workspace.  When the EE reaches the goal and **holds** there
+for 2 seconds, a new goal is sampled — the episode only ends on time-out
+(no early termination on success).
 
 | UR5e | UR3e |
 |------|------|
@@ -199,7 +293,7 @@ Both environments use:
 pytest tests/ -v
 ```
 
-Expected: **14 tests**, all passing.
+Expected: **24 tests**, all passing.
 
 ---
 

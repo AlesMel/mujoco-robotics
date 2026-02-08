@@ -30,11 +30,11 @@
       <default class="size3">
         <default class="size3_limited">
           <joint range="-3.1415 3.1415"/>
-          <general ctrlrange="-3.1415 3.1415"/>
+            <general gainprm="500" biasprm="0 -500 -100" ctrlrange="-3.14159 3.14159" forcerange="-28 28"/>
         </default>
       </default>
       <default class="size1">
-        <general gainprm="150" biasprm="0 -150 -30"
+        <general gainprm="200" biasprm="0 -200 -40"
                  forcerange="-12 12"/>
       </default>
 
@@ -65,25 +65,23 @@
 
     <!--
       Reuse UR5e meshes with per-link scale factors derived from DH ratios.
-      Scale factors:
-        base/shoulder ≈ 0.85 (radial) × 0.934 (height)
-        upper_arm     ≈ 0.80 (radial) × 0.573 (length)
-        forearm       ≈ 0.80 (radial) × 0.544 (length)
-        wrist1/2/3    ≈ 0.85 uniform
+      Radial (XY) = shoulder_offset_3e / shoulder_offset_5e = 0.120/0.138 ≈ 0.87
+      Length (Z)  = link_length_3e / link_length_5e per link
+      Wrist = d5_3e / d5_5e = 0.08535/0.0997 ≈ 0.856 uniform
     -->
-    <mesh name="base_0"       file="base_0.obj"       scale="0.85 0.85 0.934"/>
-    <mesh name="base_1"       file="base_1.obj"       scale="0.85 0.85 0.934"/>
-    <mesh name="shoulder_0"   file="shoulder_0.obj"    scale="0.85 0.85 0.85"/>
-    <mesh name="shoulder_1"   file="shoulder_1.obj"    scale="0.85 0.85 0.85"/>
-    <mesh name="shoulder_2"   file="shoulder_2.obj"    scale="0.85 0.85 0.85"/>
-    <mesh name="upperarm_0"   file="upperarm_0.obj"    scale="0.80 0.80 0.573"/>
-    <mesh name="upperarm_1"   file="upperarm_1.obj"    scale="0.80 0.80 0.573"/>
-    <mesh name="upperarm_2"   file="upperarm_2.obj"    scale="0.80 0.80 0.573"/>
-    <mesh name="upperarm_3"   file="upperarm_3.obj"    scale="0.80 0.80 0.573"/>
-    <mesh name="forearm_0"    file="forearm_0.obj"     scale="0.80 0.80 0.544"/>
-    <mesh name="forearm_1"    file="forearm_1.obj"     scale="0.80 0.80 0.544"/>
-    <mesh name="forearm_2"    file="forearm_2.obj"     scale="0.80 0.80 0.544"/>
-    <mesh name="forearm_3"    file="forearm_3.obj"     scale="0.80 0.80 0.544"/>
+    <mesh name="base_0"       file="base_0.obj"       scale="0.87 0.87 0.934"/>
+    <mesh name="base_1"       file="base_1.obj"       scale="0.87 0.87 0.934"/>
+    <mesh name="shoulder_0"   file="shoulder_0.obj"    scale="0.87 0.87 0.87"/>
+    <mesh name="shoulder_1"   file="shoulder_1.obj"    scale="0.87 0.87 0.87"/>
+    <mesh name="shoulder_2"   file="shoulder_2.obj"    scale="0.87 0.87 0.87"/>
+    <mesh name="upperarm_0"   file="upperarm_0.obj"    scale="0.87 0.87 0.573"/>
+    <mesh name="upperarm_1"   file="upperarm_1.obj"    scale="0.87 0.87 0.573"/>
+    <mesh name="upperarm_2"   file="upperarm_2.obj"    scale="0.87 0.87 0.573"/>
+    <mesh name="upperarm_3"   file="upperarm_3.obj"    scale="0.87 0.87 0.573"/>
+    <mesh name="forearm_0"    file="forearm_0.obj"     scale="0.87 0.87 0.544"/>
+    <mesh name="forearm_1"    file="forearm_1.obj"     scale="0.87 0.87 0.544"/>
+    <mesh name="forearm_2"    file="forearm_2.obj"     scale="0.87 0.87 0.544"/>
+    <mesh name="forearm_3"    file="forearm_3.obj"     scale="0.87 0.87 0.544"/>
     <mesh name="wrist1_0"     file="wrist1_0.obj"      scale="0.856 0.856 0.856"/>
     <mesh name="wrist1_1"     file="wrist1_1.obj"      scale="0.856 0.856 0.856"/>
     <mesh name="wrist1_2"     file="wrist1_2.obj"      scale="0.856 0.856 0.856"/>
@@ -144,7 +142,7 @@
 
             <!-- wrist1: d4 = 0.13105 at z = 0.2132 -->
             <body name="wrist1" pos="0 0 0.2132" quat="1 0 1 0">
-              <inertial mass="0.8" pos="0 0.109 0"
+              <inertial mass="0.8" pos="0 0.104 0"
                         diaginertia="0.0013 0.0013 0.001"/>
               <joint name="wrist1" class="size1"/>
               <geom mesh="wrist1_0" material="black" class="visual" name="link4_viz_0"/>
@@ -152,8 +150,8 @@
               <geom mesh="wrist1_2" material="jointgray" class="visual" name="link4_viz_2"/>
               <geom name="wrist1_col" class="collision" pos="0 0.04 0" quat="1 1 0 0" size="0.035 0.06"/>
 
-              <!-- wrist2: d5 = 0.08535 at y = 0.13105 -->
-              <body name="wrist2" pos="0 0.10915 0">
+              <!-- wrist2: d4-elbow_offset = 0.13105-0.027 = 0.10405 -->
+              <body name="wrist2" pos="0 0.10405 0">
                 <inertial mass="0.8" pos="0 0 0.086"
                           diaginertia="0.0013 0.0013 0.001"/>
                 <joint name="wrist2" axis="0 0 1" class="size1"/>

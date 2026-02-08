@@ -28,9 +28,12 @@ train = [
 gamepad = [
     "pygame",
 ]
+gui = [
+    "Pillow",
+]
 dev = [
     "pytest>=7.0",
-    "mujoco-robot[train,gamepad]",
+    "mujoco-robot[train,gamepad,gui]",
 ]
 
 [project.scripts]

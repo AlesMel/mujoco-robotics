@@ -557,6 +557,10 @@ class URSlotSorterEnv:
             self.data.qvel[vad] = 0
         mujoco.mj_forward(self.model, self.data)
 
+        # Anchor IK yaw target to the home heading so pure-translation
+        # commands don't cause unwanted yaw drift.
+        self._target_yaw = self._ee_yaw()
+
         for _ in range(self.settle_steps):
             mujoco.mj_step(self.model, self.data)
         return self._observe()
@@ -627,8 +631,10 @@ class URSlotSorterEnv:
         pos[0] = float(np.clip(pos[0], -self.table_half + 0.05, self.table_half - 0.05))
         pos[1] = float(np.clip(pos[1], -self.table_half + 0.05, self.table_half - 0.05))
         pos[2] = float(np.clip(pos[2], 0.76, 1.30))
-        yaw = self._ee_yaw() + dyaw
-        return pos, yaw
+        # Update persistent yaw target — pure translation (dyaw=0) keeps
+        # the heading anchored instead of following kinematic drift.
+        self._target_yaw = self._target_yaw + dyaw
+        return pos, self._target_yaw
 
     def _ik_cartesian(
         self, target_pos: np.ndarray, target_yaw: float
