@@ -1,9 +1,26 @@
 """URReachEnv — 3-D position + yaw reaching task for RL.
 
 The task: move the end-effector of a 6-DOF UR arm to a random
-goal position **and** match a target yaw orientation.  A red arrow
-shows the target pose; the episode succeeds when the EE reaches
-the arrow’s base with the correct heading.
+goal position **and** match a target yaw orientation.  A red cube
+with RGB coordinate axes shows the target pose; a matching set of
+axes on the EE shows the current orientation.
+
+Two **action modes** are supported (selected via ``action_mode``):
+
+* ``"cartesian"`` (default) — 4-D ``[dx, dy, dz, dyaw]`` Cartesian
+  velocity commands processed through a damped-least-squares IK solver.
+* ``"joint"`` — 6-D joint-position offsets (like Isaac Lab).  Each
+  action is scaled by ``joint_action_scale`` and added to the current
+  joint-position targets.
+
+Isaac-Lab-inspired features:
+
+* **Last action** is appended to the observation vector so the policy
+  can learn smooth behaviours.
+* **Observation noise** (uniform ± ``obs_noise``) is added to
+  proprioceptive channels for sim-to-real robustness.
+* **Action-rate penalty** ``-action_rate_weight * ||a_t - a_{t-1}||²``
+  discourages jerky motions.
 
 RL usage (Gymnasium)::
 
@@ -11,6 +28,9 @@ RL usage (Gymnasium)::
     env = ReachGymnasium()
     obs, info = env.reset()
     obs, reward, terminated, truncated, info = env.step(env.action_space.sample())
+
+    # Joint-space actions:
+    env = ReachGymnasium(action_mode="joint")
 
 Teleop::
 
@@ -65,6 +85,8 @@ class ReachGymnasium(gymnasium.Env):
         If ``True``, use high-resolution rendering (for video capture).
     time_limit : int
         Maximum steps per episode (0 = unlimited).
+    action_mode : str
+        ``"cartesian"`` (4-D IK) or ``"joint"`` (6-D joint offsets).
     """
 
     metadata = {"render_modes": ["rgb_array", "human"]}
@@ -75,6 +97,7 @@ class ReachGymnasium(gymnasium.Env):
         seed: int | None = None,
         render: bool = False,
         time_limit: int = 1000,
+        action_mode: str = "cartesian",
     ):
         super().__init__()
         self.base = URReachEnv(
@@ -82,6 +105,7 @@ class ReachGymnasium(gymnasium.Env):
             render_size=(160, 120) if not render else (640, 480),
             time_limit=time_limit,
             seed=seed,
+            action_mode=action_mode,
         )
         self.action_space = gymnasium.spaces.Box(
             -1.0, 1.0, shape=(self.base.action_dim,), dtype=np.float32
@@ -90,9 +114,6 @@ class ReachGymnasium(gymnasium.Env):
             -np.inf, np.inf, shape=(self.base.observation_dim,), dtype=np.float32
         )
         self.render_mode = "rgb_array" if render else None
-        assert self.observation_space.shape[0] == 25, (
-            f"Expected obs dim 25, got {self.observation_space.shape[0]}"
-        )
 
     def reset(self, *, seed: int | None = None, options=None):
         obs = self.base.reset(seed=seed)
@@ -128,31 +149,33 @@ class URReachEnv:
         - ``"ur5e"`` — UR5e with ~0.85 m reach (default)
         - ``"ur3e"`` — UR3e with ~0.50 m reach (smaller workspace)
 
-    Action space (4-D, continuous [-1, 1]):
-        ``[dx, dy, dz, dyaw]`` — Cartesian EE velocity commands.
+    Action modes:
+        - ``"cartesian"`` (4-D): ``[dx, dy, dz, dyaw]`` via IK.
+        - ``"joint"`` (6-D): joint-position offsets × ``joint_action_scale``.
 
-    Observation (25-D):
-        ============= ===== ===================================
-        Component     Dim   Description
-        ============= ===== ===================================
-        joint_pos       6   robot joint angles
-        joint_vel       6   robot joint velocities
-        ee_pos          3   end-effector world position
-        ee_yaw          1   end-effector yaw angle
-        goal_pos        3   target world position
-        goal_yaw        1   target yaw angle
-        goal_direction  3   unit vector from EE to goal
-        yaw_error       1   signed yaw difference (wrapped)
-        collision       1   1.0 if self-collision, else 0.0
-        ============= ===== ===================================
-        → total = 25
+    Observation (25 + action_dim = 29 or 31):
+        ============== ===== ===================================
+        Component      Dim   Description
+        ============== ===== ===================================
+        joint_pos        6   robot joint angles (relative to home)
+        joint_vel        6   robot joint velocities
+        ee_pos           3   end-effector world position
+        ee_yaw           1   end-effector yaw angle
+        goal_pos         3   target world position
+        goal_yaw         1   target yaw angle
+        goal_direction   3   unit vector from EE to goal
+        yaw_error        1   signed yaw difference (wrapped)
+        collision        1   1.0 if self-collision, else 0.0
+        last_action    4|6   previous action (zeros at reset)
+        ============== ===== ===================================
+        → total = 29 (cartesian) or 31 (joint)
 
     Reward:
-        Dense shaping based on position distance and yaw alignment.
-        ``0.7 * (1 − dist/init_dist) + 0.3 * (1 − |yaw_err|/π)``
-        with time penalty, collision penalty, and a +5 bonus when
-        both position and yaw thresholds are met.  One goal per
-        episode, terminates on success or time-out.
+        Dense exponential shaping based on proximity and yaw alignment.
+        ``0.6 * exp(-5·dist) + 0.4 * exp(-1·|yaw_err|)``
+        with time penalty, collision penalty, action-rate penalty,
+        and a +10 bonus when both position and yaw thresholds are met.
+        One goal per episode, terminates on success or time-out.
 
     Parameters
     ----------
@@ -162,14 +185,22 @@ class URReachEnv:
         Override MJCF path (defaults to the config entry).
     time_limit : int
         Max steps per episode (0 = unlimited).
+    action_mode : str
+        ``"cartesian"`` (4-D IK) or ``"joint"`` (6-D offsets).
     ee_step : float
-        EE position step size per action unit (metres).
+        EE position step size per action unit (metres). Cartesian only.
     yaw_step : float
-        EE yaw step size per action unit (radians).
+        EE yaw step size per action unit (radians). Cartesian only.
+    joint_action_scale : float
+        Scaling factor for joint-position offsets. Joint mode only.
     reach_threshold : float
         Distance threshold to count as "reached" (metres).
-    reach_steps_required : int
-        Consecutive in-threshold steps required for a reach.
+    yaw_threshold : float
+        Yaw error threshold to count as "reached" (radians).
+    obs_noise : float
+        Uniform observation noise amplitude (applied to proprioception).
+    action_rate_weight : float
+        Penalty weight for ``||a_t - a_{t-1}||²``.
     render_size : tuple[int, int]
         Width × height of the offscreen renderer.
     seed : int | None
@@ -181,10 +212,14 @@ class URReachEnv:
         robot: str = "ur5e",
         model_path: Optional[str] = None,
         time_limit: int = 1000,
+        action_mode: str = "cartesian",
         ee_step: float = 0.06,
         yaw_step: float = 0.5,
+        joint_action_scale: float = 0.5,
         reach_threshold: float = 0.06,
         yaw_threshold: float = 0.35,
+        obs_noise: float = 0.01,
+        action_rate_weight: float = 0.005,
         render_size: Tuple[int, int] = (960, 720),
         seed: Optional[int] = None,
     ) -> None:
@@ -198,11 +233,19 @@ class URReachEnv:
         self._LINK_LENGTHS = cfg.link_lengths
         self._TOTAL_REACH = cfg.total_reach
 
+        # Action mode: "cartesian" (4-D IK) or "joint" (6-D offsets)
+        if action_mode not in ("cartesian", "joint"):
+            raise ValueError(f"action_mode must be 'cartesian' or 'joint', got '{action_mode}'")
+        self.action_mode = action_mode
+
         self.time_limit = time_limit
         self.ee_step = ee_step
         self.yaw_step = yaw_step
+        self.joint_action_scale = joint_action_scale
         self.reach_threshold = reach_threshold
         self.yaw_threshold = yaw_threshold
+        self.obs_noise = obs_noise
+        self.action_rate_weight = action_rate_weight
         self.render_size = render_size
 
         # Physics / control tuning
@@ -300,22 +343,25 @@ class URReachEnv:
         self._init_dist = 1.0
         self._init_yaw_err = math.pi
         self._goals_reached = 0
+        self._last_action = np.zeros(self.action_dim, dtype=np.float32)
+        self._prev_action = np.zeros(self.action_dim, dtype=np.float32)
 
     # -------------------------------------------------------------- Properties
     @property
     def action_dim(self) -> int:
-        """Action dimensionality: ``[dx, dy, dz, dyaw]``."""
-        return 4
+        """Action dimensionality: 4 (cartesian) or 6 (joint)."""
+        return 4 if self.action_mode == "cartesian" else 6
 
     @property
     def observation_dim(self) -> int:
-        """Observation dimensionality (25).
+        """Observation dimensionality: 25 base + action_dim (last_action).
 
         6 joint_pos + 6 joint_vel + 3 ee_pos + 1 ee_yaw
         + 3 goal_pos + 1 goal_yaw + 3 goal_direction
-        + 1 yaw_error + 1 collision = 25
+        + 1 yaw_error + 1 collision + action_dim last_action
+        = 29 (cartesian) or 31 (joint)
         """
-        return 25
+        return 25 + self.action_dim
 
     # -------------------------------------------------------------- Reset
     def reset(self, seed: Optional[int] = None) -> np.ndarray:
@@ -327,6 +373,8 @@ class URReachEnv:
         self.step_id = 0
         self._goals_reached = 0
         self._last_targets = self.init_q.copy()
+        self._last_action = np.zeros(self.action_dim, dtype=np.float32)
+        self._prev_action = np.zeros(self.action_dim, dtype=np.float32)
 
         # Set robot to home pose
         for qi, j in enumerate(self.robot_joints):
@@ -440,25 +488,46 @@ class URReachEnv:
 
     def _observe(self) -> np.ndarray:
         parts: List[np.ndarray] = []
-        for j in self.robot_joints:
+
+        # Joint positions — relative to home pose (Isaac Lab style)
+        for qi, j in enumerate(self.robot_joints):
             jid = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, j)
-            parts.append(np.array([self.data.qpos[self.model.jnt_qposadr[jid]]]))
+            qpos = self.data.qpos[self.model.jnt_qposadr[jid]]
+            parts.append(np.array([qpos - self.init_q[qi]]))
+
+        # Joint velocities
         for j in self.robot_joints:
             jid = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, j)
             parts.append(np.array([self.data.qvel[self.model.jnt_dofadr[jid]]]))
+
         parts.append(self.data.site_xpos[self.ee_site].copy())
         parts.append(np.array([self._ee_yaw()]))
         parts.append(self.goal_pos.copy())
         parts.append(np.array([self.goal_yaw]))
+
         # Direction from EE to goal (normalised)
         ee2goal = self.goal_pos - self.data.site_xpos[self.ee_site]
         d = np.linalg.norm(ee2goal)
         direction = ee2goal / max(d, 1e-6)
         parts.append(direction)
+
         # Signed yaw error (wrapped to [-π, π])
         parts.append(np.array([self._yaw_error()]))
         parts.append(np.array([float(self._self_collision_count > 0)]))
-        return np.concatenate(parts).astype(np.float32)
+
+        # Last action (Isaac Lab style — helps policy learn smooth control)
+        parts.append(self._last_action.copy())
+
+        obs = np.concatenate(parts).astype(np.float32)
+
+        # Observation noise on proprioceptive channels (first 12: joints)
+        if self.obs_noise > 0.0:
+            noise = self._rng.uniform(
+                -self.obs_noise, self.obs_noise, size=12
+            ).astype(np.float32)
+            obs[:12] += noise
+
+        return obs
 
     # -------------------------------------------------------------- Reward
     def _compute_reward(self) -> Tuple[float, bool, Dict]:
@@ -469,21 +538,33 @@ class URReachEnv:
         yaw_ok = yaw_err < self.yaw_threshold
         reached = pos_ok and yaw_ok
 
-        # ---- Dense reward: position (70%) + yaw (30%) ----
-        pos_reward = 1.0 - dist / max(self._init_dist, 1e-6)
-        yaw_reward = 1.0 - yaw_err / max(self._init_yaw_err, 1e-6)
-        reward = 0.7 * pos_reward + 0.3 * yaw_reward
+        # ---- Dense reward: exponential closeness (no init-dist dependency) ----
+        #
+        # Position: exp(-α·dist)   → 1.0 at goal, ~0.22 at 0.3m, ~0.05 at 0.6m
+        # Yaw:      exp(-β·|err|)  → 1.0 at match, ~0.37 at 1 rad
+        #
+        # This gives a smooth, consistent gradient regardless of episode-specific
+        # initial distances, and creates a strong "pull" near the goal.
+        pos_reward = math.exp(-5.0 * dist)           # range (0, 1]
+        yaw_reward = math.exp(-1.0 * yaw_err)        # range (0, 1]
 
-        # Small time penalty
-        reward -= 0.005
+        # Weight position higher until close, then yaw matters more
+        reward = 0.6 * pos_reward + 0.4 * yaw_reward
+
+        # Small time penalty to discourage dawdling
+        reward -= 0.01
+
+        # Action rate penalty (Isaac Lab style — smooth motions)
+        action_delta = self._last_action - self._prev_action
+        reward -= self.action_rate_weight * float(np.dot(action_delta, action_delta))
 
         # Self-collision penalty
         if self._self_collision_count > 0:
-            reward -= 0.5
+            reward -= 1.0
 
         # Reach bonus (position + yaw)
         if reached:
-            reward += 5.0
+            reward += 10.0
             self._goals_reached += 1
 
         time_up = self.time_limit > 0 and self.step_id >= self.time_limit
@@ -511,8 +592,9 @@ class URReachEnv:
 
         Parameters
         ----------
-        action : array-like, shape (4,)
-            ``[dx, dy, dz, dyaw]`` each in [-1, 1].
+        action : array-like, shape (4,) or (6,)
+            Cartesian mode: ``[dx, dy, dz, dyaw]`` each in [-1, 1].
+            Joint mode: 6 joint-position offsets each in [-1, 1].
 
         Returns
         -------
@@ -524,19 +606,29 @@ class URReachEnv:
             raise ValueError(f"Expected action dim {self.action_dim}, got {act.shape[0]}")
         act = np.clip(act, -1.0, 1.0)
 
-        delta_pos = act[:3] * self.ee_step
-        dyaw = act[3] * self.yaw_step
+        # Track actions for action-rate penalty
+        self._prev_action = self._last_action.copy()
+        self._last_action = act.astype(np.float32).copy()
 
-        target_pos, target_yaw = self._desired_ee(delta_pos, dyaw)
-        qvel_cmd = self._ik_cartesian(target_pos, target_yaw)
-        qvel_cmd = np.clip(qvel_cmd, -self.max_joint_vel, self.max_joint_vel)
-
-        ik_gain = 0.15
         prev_targets = self._last_targets.copy()
-        if np.linalg.norm(act) < self.hold_eps:
-            qpos_targets = self._last_targets.copy()
+
+        if self.action_mode == "cartesian":
+            # --- Cartesian IK path (original) ---
+            delta_pos = act[:3] * self.ee_step
+            dyaw = act[3] * self.yaw_step
+
+            target_pos, target_yaw = self._desired_ee(delta_pos, dyaw)
+            qvel_cmd = self._ik_cartesian(target_pos, target_yaw)
+            qvel_cmd = np.clip(qvel_cmd, -self.max_joint_vel, self.max_joint_vel)
+
+            ik_gain = 0.15
+            if np.linalg.norm(act) < self.hold_eps:
+                qpos_targets = self._last_targets.copy()
+            else:
+                qpos_targets = self._last_targets + qvel_cmd * ik_gain
         else:
-            qpos_targets = self._last_targets + qvel_cmd * ik_gain
+            # --- Joint-space offsets (Isaac Lab style) ---
+            qpos_targets = self._last_targets + act * self.joint_action_scale
 
         qpos_targets = self._clamp_to_limits(qpos_targets)
         self._last_targets = qpos_targets.copy()

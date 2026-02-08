@@ -22,13 +22,14 @@ from mujoco_robot.training.callbacks import BestEpisodeVideoCallback
 
 
 def train_reach_ppo(
-    robot: str = "ur5e",
+    robot: str = "ur3e",
     total_timesteps: int = 500_000,
     n_envs: int = 8,
     log_dir: str = "runs",
     log_name: str = "reach_ppo",
     save_video: bool = True,
     save_video_every: int = 50_000,
+    action_mode: str = "cartesian",
 ):
     """Quick-start PPO training on the reach task.
 
@@ -48,6 +49,8 @@ def train_reach_ppo(
         Whether to record periodic eval videos.
     save_video_every : int
         Training timesteps between video recordings.
+    action_mode : str
+        ``"cartesian"`` (4-D IK) or ``"joint"`` (6-D joint offsets).
 
     Returns
     -------
@@ -56,7 +59,7 @@ def train_reach_ppo(
     """
     def make_env(rank):
         def _init():
-            return Monitor(ReachGymnasium(robot=robot, seed=rank))
+            return Monitor(ReachGymnasium(robot=robot, seed=rank, action_mode=action_mode))
         return _init
 
     vec_env = DummyVecEnv([make_env(i) for i in range(n_envs)])
@@ -66,7 +69,7 @@ def train_reach_ppo(
     callbacks = []
     if save_video:
         def make_eval_env():
-            return Monitor(ReachGymnasium(robot=robot, render=True))
+            return Monitor(ReachGymnasium(robot=robot, render=True, action_mode=action_mode))
 
         video_cb = BestEpisodeVideoCallback(
             make_eval_env=make_eval_env,
@@ -115,6 +118,9 @@ def main():
                     choices=list(ROBOT_CONFIGS.keys()))
     p.add_argument("--total-timesteps", type=int, default=500_000)
     p.add_argument("--n-envs", type=int, default=8)
+    p.add_argument("--action-mode", type=str, default="joint",
+                    choices=["cartesian", "joint"],
+                    help="Action mode: 'cartesian' (4-D IK) or 'joint' (6-D offsets)")
     p.add_argument("--save-video", action=argparse.BooleanOptionalAction, default=True)
     p.add_argument("--save-video-every", type=int, default=50_000)
     args = p.parse_args()
@@ -125,6 +131,7 @@ def main():
         n_envs=args.n_envs,
         save_video=args.save_video,
         save_video_every=args.save_video_every,
+        action_mode=args.action_mode,
     )
 
 

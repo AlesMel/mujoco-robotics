@@ -96,8 +96,11 @@ python scripts/teleop.py --task slot_sorter --gamepad
 ### 3. Train with PPO
 
 ```bash
-# Reach task
+# Reach task (default: Cartesian IK actions)
 python scripts/train.py --task reach --robot ur5e --total-timesteps 500000
+
+# Reach task (joint-space actions, Isaac Lab style)
+python scripts/train.py --task reach --robot ur5e --action-mode joint --total-timesteps 500000
 
 # Slot sorter
 python scripts/train.py --task slot_sorter --total-timesteps 1000000
@@ -112,7 +115,8 @@ tensorboard --logdir runs
 # Gymnasium API (compatible with SB3, CleanRL, etc.)
 from mujoco_robot.envs import ReachGymnasium
 
-env = ReachGymnasium(robot="ur5e")
+env = ReachGymnasium(robot="ur5e")  # Cartesian IK (4-D actions)
+# env = ReachGymnasium(robot="ur5e", action_mode="joint")  # Joint offsets (6-D)
 obs, info = env.reset()
 
 for _ in range(1000):
@@ -170,7 +174,8 @@ Each robot MJCF uses a **dual-geom architecture** for robust collision handling:
 
 | Environment | Action Dim | Obs Dim | Description |
 |-------------|-----------|---------|-------------|
-| `URReachEnv` | 4 | 25 | Move EE to random 3-D pose (pos + yaw) |
+| `URReachEnv` (cartesian) | 4 | 29 | Move EE to random 3-D pose (pos + yaw) via IK |
+| `URReachEnv` (joint) | 6 | 31 | Move EE to random 3-D pose via joint offsets |
 | `URSlotSorterEnv` | 5 | 71 | Pick colored objects → matching slots |
 
 Both environments use:
