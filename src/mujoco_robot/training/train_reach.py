@@ -31,7 +31,7 @@ def train_reach_ppo(
     save_video_every: int = 50_000,
     action_mode: str = "joint",
     reach_threshold: float = 0.05,
-    yaw_threshold: float = 0.35,
+    ori_threshold: float = 0.35,
     hold_seconds: float = 2.0,
 ):
     """Quick-start PPO training on the reach task.
@@ -53,11 +53,11 @@ def train_reach_ppo(
     save_video_every : int
         Training timesteps between video recordings.
     action_mode : str
-        ``"cartesian"`` (4-D IK) or ``"joint"`` (6-D joint offsets).
+        ``"cartesian"`` (6-D IK) or ``"joint"`` (6-D joint offsets).
     reach_threshold : float
         Position distance (m) within which the EE counts as "at goal".
-    yaw_threshold : float
-        Yaw error (rad) within which orientation counts as matched.
+    ori_threshold : float
+        Orientation error (rad) within which orientation counts as matched.
     hold_seconds : float
         Seconds the EE must stay within both thresholds before the
         goal is resampled.  Set to 0 for instant resample on reach.
@@ -69,7 +69,7 @@ def train_reach_ppo(
     """
     env_kwargs = dict(
         reach_threshold=reach_threshold,
-        yaw_threshold=yaw_threshold,
+        ori_threshold=ori_threshold,
         hold_seconds=hold_seconds,
     )
 
@@ -78,7 +78,7 @@ def train_reach_ppo(
     print(f"  Robot:            {robot}")
     print(f"  Action mode:      {action_mode}")
     print(f"  Reach threshold:  {reach_threshold:.3f} m")
-    print(f"  Yaw threshold:    {yaw_threshold:.2f} rad")
+    print(f"  Ori threshold:    {ori_threshold:.2f} rad")
     print(f"  Hold time:        {hold_seconds:.1f} s")
     print(f"  Total timesteps:  {total_timesteps:,}")
     print(f"{'='*50}\n")
@@ -161,11 +161,11 @@ def main():
     p.add_argument("--n-envs", type=int, default=16)
     p.add_argument("--action-mode", type=str, default="joint",
                     choices=["cartesian", "joint"],
-                    help="Action mode: 'cartesian' (4-D IK) or 'joint' (6-D offsets)")
+                    help="Action mode: 'cartesian' (6-D IK) or 'joint' (6-D offsets)")
     p.add_argument("--reach-threshold", type=float, default=0.05,
                     help="Position tolerance for goal reached (metres, default: 0.05)")
-    p.add_argument("--yaw-threshold", type=float, default=0.35,
-                    help="Yaw tolerance for goal reached (radians, default: 0.35)")
+    p.add_argument("--ori-threshold", type=float, default=0.35,
+                    help="Orientation tolerance for goal reached (radians, default: 0.35)")
     p.add_argument("--hold-seconds", type=float, default=2.0,
                     help="Seconds to hold at goal before resample (default: 2.0)")
     p.add_argument("--save-video", action=argparse.BooleanOptionalAction, default=True)
@@ -180,7 +180,7 @@ def main():
         save_video_every=args.save_video_every,
         action_mode=args.action_mode,
         reach_threshold=args.reach_threshold,
-        yaw_threshold=args.yaw_threshold,
+        ori_threshold=args.ori_threshold,
         hold_seconds=args.hold_seconds,
     )
 

@@ -61,16 +61,21 @@ def _add_axes_frame(
     axis_len: float,
     axis_rad: float,
     alpha: float = 0.85,
+    ghost_yz: bool = False,
 ) -> None:
     """Add RGB coordinate-frame axes (X=red, Y=green, Z=blue) to *parent*.
 
     Each axis is a thin cylinder drawn from the origin along its direction.
     ``prefix`` is prepended to geom names to keep them unique.
+
+    If *ghost_yz* is True, the Y and Z axes are drawn very faintly
+    (useful for the goal marker where only yaw/heading is controlled).
     """
+    yz_alpha = 0.12 if ghost_yz else alpha
     axes = [
         ("x", f"{axis_len} 0 0", f"1 0 0 {alpha}"),
-        ("y", f"0 {axis_len} 0", f"0 1 0 {alpha}"),
-        ("z", f"0 0 {axis_len}", f"0 0 1 {alpha}"),
+        ("y", f"0 {axis_len} 0", f"0 1 0 {yz_alpha}"),
+        ("z", f"0 0 {axis_len}", f"0 0 1 {yz_alpha}"),
     ]
     for axis_name, endpoint, rgba in axes:
         ET.SubElement(parent, "geom", {
@@ -93,8 +98,8 @@ def inject_goal_marker(
     """Add a goal marker with a translucent cube and RGB coordinate axes.
 
     The cube shows the target position; the RGB axes (X=red, Y=green,
-    Z=blue) show the desired yaw orientation.  The goal body is rotated
-    at runtime via quaternion about Z.
+    Z=blue) show the desired full 3-D orientation.  The goal body's
+    quaternion is set at runtime to the sampled target orientation.
     """
     worldbody = root.find("worldbody")
     if worldbody is None:
@@ -121,7 +126,8 @@ def inject_goal_marker(
         "conaffinity": "0",
         "mass": "0",
     })
-    # RGB coordinate axes
+    # RGB coordinate axes — all 3 axes shown at full alpha
+    # since this task controls full 3-D orientation.
     axis_len = round(reach_threshold * 2.5, 4)
     axis_rad = round(reach_threshold * 0.12, 4)
     _add_axes_frame(goal_body, "goal", axis_len, axis_rad, alpha=0.8)
@@ -157,11 +163,12 @@ def inject_ee_axes(
     # Remove the old sphere
     wrist3.remove(ee_sphere)
 
-    # Add a child body at the ee_sphere position with RGB axes
+    # Add a child body at the ee_sphere position with RGB axes.
+    # No local rotation — the axes show the raw tool-flange frame
+    # so they match the goal axes when the full orientation is aligned.
     ee_frame = ET.SubElement(wrist3, "body", {
         "name": "ee_frame",
         "pos": ee_pos,
-        "quat": "-1 1 0 0",  # same orientation as ee_site
     })
     axis_len = round(reach_threshold * 2.5, 4)
     axis_rad = round(reach_threshold * 0.12, 4)

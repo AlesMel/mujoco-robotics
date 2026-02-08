@@ -1,14 +1,16 @@
-"""URReachEnv — 3-D position + yaw reaching task for RL.
+"""URReachEnv — 3-D position + full orientation reaching task for RL.
 
 The task: move the end-effector of a 6-DOF UR arm to a random
-goal position **and** match a target yaw orientation.  A red cube
-with RGB coordinate axes shows the target pose; a matching set of
-axes on the EE shows the current orientation.
+goal position **and** match a target orientation (full quaternion).
+A red cube with RGB coordinate axes shows the target pose; a matching
+set of axes on the EE shows the current orientation.
 
 Two **action modes** are supported (selected via ``action_mode``):
 
-* ``"cartesian"`` (default) — 4-D ``[dx, dy, dz, dyaw]`` Cartesian
-  velocity commands processed through a damped-least-squares IK solver.
+* ``"cartesian"`` (default) — 6-D ``[dx, dy, dz, dwx, dwy, dwz]``
+  Cartesian velocity commands processed through a damped-least-squares
+  IK solver.  The first 3 components are linear velocity, the last 3
+  are angular velocity (axis-angle increments).
 * ``"joint"`` — 6-D joint-position offsets (like Isaac Lab).  Each
   action is scaled by ``joint_action_scale`` and added to the current
   joint-position targets.
@@ -52,7 +54,15 @@ import mujoco
 import numpy as np
 
 from mujoco_robot.robots.configs import ROBOT_CONFIGS, RobotConfig, get_robot_config
-from mujoco_robot.core.ik_controller import IKController
+from mujoco_robot.core.ik_controller import (
+    IKController,
+    axis_angle_from_quat,
+    orientation_error_axis_angle,
+    quat_conjugate,
+    quat_error_magnitude,
+    quat_multiply,
+    quat_unique,
+)
 from mujoco_robot.core.collision import CollisionDetector
 from mujoco_robot.core.xml_builder import load_robot_xml, build_reach_xml
 
@@ -94,7 +104,7 @@ class ReachGymnasium(gymnasium.Env):
         env = ReachGymnasium(
             robot="ur3e",
             reach_threshold=0.05,
-            yaw_threshold=0.35,
+            ori_threshold=0.35,
             hold_seconds=2.0,
         )
 
@@ -109,7 +119,7 @@ class ReachGymnasium(gymnasium.Env):
     time_limit : int
         Maximum steps per episode (0 = unlimited).
     action_mode : str
-        ``"cartesian"`` (4-D IK) or ``"joint"`` (6-D joint offsets).
+        ``"cartesian"`` (6-D IK) or ``"joint"`` (6-D joint offsets).
     **env_kwargs
         Any extra keyword arguments are forwarded directly to
         :class:`URReachEnv` (e.g. ``reach_threshold``, ``hold_seconds``).
@@ -174,40 +184,40 @@ class ReachGymnasium(gymnasium.Env):
 # Core environment
 # ---------------------------------------------------------------------------
 class URReachEnv:
-    """Simple position-reaching task for a UR-style arm.
+    """Simple position + orientation reaching task for a UR-style arm.
 
     Supports multiple robots via the ``robot`` parameter:
         - ``"ur5e"`` — UR5e with ~0.85 m reach (default)
         - ``"ur3e"`` — UR3e with ~0.50 m reach (smaller workspace)
 
     Action modes:
-        - ``"cartesian"`` (4-D): ``[dx, dy, dz, dyaw]`` via IK.
+        - ``"cartesian"`` (6-D): ``[dx, dy, dz, dwx, dwy, dwz]`` via IK.
         - ``"joint"`` (6-D): joint-position offsets × ``joint_action_scale``.
 
-    Observation (25 + action_dim = 29 or 31):
+    Observation (33 + action_dim = 39):
         ============== ===== ===================================
         Component      Dim   Description
         ============== ===== ===================================
         joint_pos        6   robot joint angles (relative to home)
         joint_vel        6   robot joint velocities
         ee_pos           3   end-effector world position
-        ee_yaw           1   end-effector yaw angle
+        ee_quat          4   end-effector orientation (w,x,y,z)
         goal_pos         3   target world position
-        goal_yaw         1   target yaw angle
+        goal_quat        4   target orientation (w,x,y,z)
         goal_direction   3   unit vector from EE to goal
-        yaw_error        1   signed yaw difference (wrapped)
+        ori_error        3   axis-angle orientation error
         collision        1   1.0 if self-collision, else 0.0
-        last_action    4|6   previous action (zeros at reset)
+        last_action      6   previous action (zeros at reset)
         ============== ===== ===================================
-        → total = 29 (cartesian) or 31 (joint)
+        → total = 39
 
     Reward:
         Isaac Lab style dense shaping with **hold-then-resample**:
-        ``-0.2 * dist + 0.1 * tanh(1 - dist/0.1) - 0.1 * |yaw_err|``
+        ``-0.2 * dist + 0.1 * tanh(1 - dist/0.1) - 0.1 * ori_err_mag``
         with curriculum-ramped action-rate and joint-velocity penalties
         and a collision penalty.  Goals are resampled only when the
         end-effector reaches the goal (within ``reach_threshold`` and
-        ``yaw_threshold``) **and** holds there for ``hold_seconds``.
+        ``ori_threshold``) **and** holds there for ``hold_seconds``.
         The episode only ends on time-out.
 
     Parameters
@@ -219,20 +229,20 @@ class URReachEnv:
     time_limit : int
         Max steps per episode (0 = unlimited).
     action_mode : str
-        ``"cartesian"`` (4-D IK) or ``"joint"`` (6-D offsets).
+        ``"cartesian"`` (6-D IK) or ``"joint"`` (6-D offsets).
     ee_step : float
         EE position step size per action unit (metres). Cartesian only.
-    yaw_step : float
-        EE yaw step size per action unit (radians). Cartesian only.
+    ori_step : float
+        EE orientation step size per action unit (radians). Cartesian only.
     joint_action_scale : float
         Scaling factor for joint-position offsets (radians). Joint mode only.
         Default 0.5 matches Isaac Lab's joint-position action scale.
     reach_threshold : float
         Distance (metres) within which the EE is considered to have
         reached the goal position.  Default 0.02 (2 cm).
-    yaw_threshold : float
-        Yaw error (radians) within which orientation is considered
-        matched.  Default 0.35 (~20°).
+    ori_threshold : float
+        Orientation error (radians) within which orientation is
+        considered matched.  Default 0.35 (~20°).
     hold_seconds : float
         Time (seconds) the EE must stay within both thresholds
         before the goal is resampled.  At ~31 Hz this is converted
@@ -254,10 +264,10 @@ class URReachEnv:
         time_limit: int = 375,
         action_mode: str = "cartesian",
         ee_step: float = 0.06,
-        yaw_step: float = 0.5,
+        ori_step: float = 0.5,
         joint_action_scale: float = 0.125,
         reach_threshold: float = 0.05,
-        yaw_threshold: float = 0.35,
+        ori_threshold: float = 0.35,
         hold_seconds: float = 2.0,
         obs_noise: float = 0.01,
         action_rate_weight: float = 0.0001,
@@ -284,7 +294,7 @@ class URReachEnv:
 
         self.time_limit = time_limit
         self.ee_step = ee_step
-        self.yaw_step = yaw_step
+        self.ori_step = ori_step
         self.joint_action_scale = joint_action_scale
         self.obs_noise = obs_noise
         self.action_rate_weight = action_rate_weight
@@ -296,7 +306,7 @@ class URReachEnv:
         # Hold-then-resample: the EE must reach the goal AND hold
         # there for ``hold_seconds`` before a new goal is sampled.
         self.reach_threshold = reach_threshold
-        self.yaw_threshold = yaw_threshold
+        self.ori_threshold = ori_threshold
         control_dt = 0.002 * 16  # timestep × n_substeps
         self.hold_steps = max(1, int(round(hold_seconds / control_dt)))
         self._hold_counter = 0      # counts steps spent inside thresholds
@@ -402,10 +412,10 @@ class URReachEnv:
         # State
         self._last_targets = self.init_q.copy()
         self.goal_pos = np.zeros(3)
-        self.goal_yaw = 0.0
+        self.goal_quat = np.array([1.0, 0.0, 0.0, 0.0])  # identity quaternion
         self.step_id = 0
         self._init_dist = 1.0
-        self._init_yaw_err = math.pi
+        self._init_ori_err = np.pi
         self._goals_reached = 0
         self._last_action = np.zeros(self.action_dim, dtype=np.float32)
         self._prev_action = np.zeros(self.action_dim, dtype=np.float32)
@@ -413,19 +423,19 @@ class URReachEnv:
     # -------------------------------------------------------------- Properties
     @property
     def action_dim(self) -> int:
-        """Action dimensionality: 4 (cartesian) or 6 (joint)."""
-        return 4 if self.action_mode == "cartesian" else 6
+        """Action dimensionality: 6 (both cartesian and joint)."""
+        return 6
 
     @property
     def observation_dim(self) -> int:
-        """Observation dimensionality: 25 base + action_dim (last_action).
+        """Observation dimensionality: 33 base + action_dim (last_action).
 
-        6 joint_pos + 6 joint_vel + 3 ee_pos + 1 ee_yaw
-        + 3 goal_pos + 1 goal_yaw + 3 goal_direction
-        + 1 yaw_error + 1 collision + action_dim last_action
-        = 29 (cartesian) or 31 (joint)
+        6 joint_pos + 6 joint_vel + 3 ee_pos + 4 ee_quat
+        + 3 goal_pos + 4 goal_quat + 3 goal_direction
+        + 3 ori_error + 1 collision + 6 last_action
+        = 39
         """
-        return 25 + self.action_dim
+        return 33 + self.action_dim
 
     # -------------------------------------------------------------- Reset
     def reset(self, seed: Optional[int] = None) -> np.ndarray:
@@ -468,20 +478,21 @@ class URReachEnv:
 
         mujoco.mj_forward(self.model, self.data)
 
-        # Anchor the IK yaw target to the current (home) yaw so that
-        # pure-translation commands don't drift the heading.
-        self._target_yaw = self._ee_yaw()
+        # Anchor the IK orientation target to the current (home)
+        # quaternion so that pure-translation commands don't drift
+        # the orientation.
+        self._target_quat = self._ee_quat()
 
         # Sample goal — must be reachable and not too close to current EE
         self.goal_pos = self._sample_goal()
-        self.goal_yaw = float(self._rng.uniform(-math.pi, math.pi))
-        self._place_goal_marker(self.goal_pos, self.goal_yaw)
+        self.goal_quat = self._sample_goal_quat()
+        self._place_goal_marker(self.goal_pos, self.goal_quat)
 
         for _ in range(self.settle_steps):
             mujoco.mj_step(self.model, self.data)
 
         self._init_dist = self._ee_goal_dist()
-        self._init_yaw_err = abs(self._yaw_error())
+        self._init_ori_err = self._orientation_error_magnitude()
         return self._observe()
 
     def _sample_goal(self) -> np.ndarray:
@@ -519,37 +530,87 @@ class URReachEnv:
         # Fallback — safe position in front of the robot
         return self._BASE_POS + np.array([0.25, 0.0, 0.30])
 
-    def _place_goal_marker(self, pos: np.ndarray, yaw: float = 0.0) -> None:
-        """Move and rotate the goal arrow to the desired pose.
+    def _sample_goal_quat(self) -> np.ndarray:
+        """Sample a random unit quaternion (w,x,y,z) for the goal orientation.
 
-        The arrow body’s +X axis is rotated to point along ``yaw``
-        (rotation about world Z).
+        Uses uniform random rotation via the Shoemake method.
+        """
+        u1, u2, u3 = self._rng.uniform(0, 1, size=3)
+        sqrt_u1 = np.sqrt(u1)
+        sqrt_1mu1 = np.sqrt(1.0 - u1)
+        q = np.array([
+            sqrt_1mu1 * np.sin(2 * np.pi * u2),
+            sqrt_1mu1 * np.cos(2 * np.pi * u2),
+            sqrt_u1 * np.sin(2 * np.pi * u3),
+            sqrt_u1 * np.cos(2 * np.pi * u3),
+        ])
+        return quat_unique(q)
+
+    def _place_goal_marker(self, pos: np.ndarray, quat: np.ndarray) -> None:
+        """Move and rotate the goal marker to the desired pose.
+
+        Parameters
+        ----------
+        pos : (3,) array
+            Desired goal position.
+        quat : (4,) array
+            Desired goal orientation as unit quaternion (w,x,y,z).
         """
         body_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, "goal_body")
         self.model.body_pos[body_id] = pos
-        # Quaternion for rotation about Z by `yaw`:
-        #   quat = [cos(yaw/2), 0, 0, sin(yaw/2)]
-        half = yaw / 2.0
-        self.model.body_quat[body_id] = [
-            math.cos(half), 0.0, 0.0, math.sin(half)
-        ]
+        self.model.body_quat[body_id] = quat
         mujoco.mj_forward(self.model, self.data)
 
     # -------------------------------------------------------------- IK + control
-    def _ee_yaw(self) -> float:
-        return self._ik.ee_yaw()
+    def _ee_quat(self) -> np.ndarray:
+        """Current EE orientation as unit quaternion (w,x,y,z)."""
+        return self._ik.ee_quat()
 
-    def _desired_ee(self, delta_xyz: np.ndarray, dyaw: float) -> Tuple[np.ndarray, float]:
+    def _desired_ee(
+        self,
+        delta_xyz: np.ndarray,
+        delta_ori: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Compute desired EE pose from Cartesian action.
+
+        Parameters
+        ----------
+        delta_xyz : (3,) array
+            Position increment in world frame.
+        delta_ori : (3,) array
+            Axis-angle orientation increment in world frame.
+
+        Returns
+        -------
+        target_pos : (3,) array
+            Clamped target position.
+        target_quat : (4,) array
+            Updated target orientation quaternion (w,x,y,z).
+        """
         pos = self.data.site_xpos[self.ee_site].copy() + delta_xyz
         for i in range(3):
             pos[i] = float(np.clip(pos[i], self.ee_bounds[i, 0], self.ee_bounds[i, 1]))
-        # Update persistent yaw target — pure translation (dyaw=0) keeps
-        # the heading anchored instead of following kinematic drift.
-        self._target_yaw = self._target_yaw + dyaw
-        return pos, self._target_yaw
 
-    def _ik_cartesian(self, target_pos: np.ndarray, target_yaw: float) -> np.ndarray:
-        return self._ik.solve(target_pos, target_yaw)
+        # Integrate orientation: convert axis-angle delta to quaternion
+        # and compose with the persistent target quaternion.
+        angle = np.linalg.norm(delta_ori)
+        if angle > 1e-8:
+            axis = delta_ori / angle
+            half = angle / 2.0
+            dq = np.array([
+                np.cos(half),
+                axis[0] * np.sin(half),
+                axis[1] * np.sin(half),
+                axis[2] * np.sin(half),
+            ])
+            self._target_quat = quat_unique(
+                quat_multiply(dq, self._target_quat)
+            )
+
+        return pos, self._target_quat.copy()
+
+    def _ik_cartesian(self, target_pos: np.ndarray, target_quat: np.ndarray) -> np.ndarray:
+        return self._ik.solve(target_pos, target_quat)
 
     def _clamp_to_limits(self, targets: np.ndarray) -> np.ndarray:
         out = targets.copy()
@@ -566,10 +627,13 @@ class URReachEnv:
             self.data.site_xpos[self.ee_site] - self.goal_pos
         ))
 
-    def _yaw_error(self) -> float:
-        """Signed yaw error wrapped to [-π, π]."""
-        err = self.goal_yaw - self._ee_yaw()
-        return float((err + math.pi) % (2 * math.pi) - math.pi)
+    def _orientation_error(self) -> np.ndarray:
+        """Axis-angle orientation error vector (3-D), from EE toward goal."""
+        return orientation_error_axis_angle(self._ee_quat(), self.goal_quat)
+
+    def _orientation_error_magnitude(self) -> float:
+        """Scalar orientation error in radians ∈ [0, π]."""
+        return quat_error_magnitude(self._ee_quat(), self.goal_quat)
 
     def _observe(self) -> np.ndarray:
         parts: List[np.ndarray] = []
@@ -585,23 +649,23 @@ class URReachEnv:
             jid = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, j)
             parts.append(np.array([self.data.qvel[self.model.jnt_dofadr[jid]]]))
 
-        parts.append(self.data.site_xpos[self.ee_site].copy())
-        parts.append(np.array([self._ee_yaw()]))
-        parts.append(self.goal_pos.copy())
-        parts.append(np.array([self.goal_yaw]))
+        parts.append(self.data.site_xpos[self.ee_site].copy())        # (3,)
+        parts.append(self._ee_quat())                                   # (4,)
+        parts.append(self.goal_pos.copy())                              # (3,)
+        parts.append(self.goal_quat.copy())                             # (4,)
 
         # Direction from EE to goal (normalised)
         ee2goal = self.goal_pos - self.data.site_xpos[self.ee_site]
         d = np.linalg.norm(ee2goal)
         direction = ee2goal / max(d, 1e-6)
-        parts.append(direction)
+        parts.append(direction)                                         # (3,)
 
-        # Signed yaw error (wrapped to [-π, π])
-        parts.append(np.array([self._yaw_error()]))
-        parts.append(np.array([float(self._self_collision_count > 0)]))
+        # Orientation error as 3-D axis-angle vector
+        parts.append(self._orientation_error())                         # (3,)
+        parts.append(np.array([float(self._self_collision_count > 0)])) # (1,)
 
         # Last action (Isaac Lab style — helps policy learn smooth control)
-        parts.append(self._last_action.copy())
+        parts.append(self._last_action.copy())                          # (6,)
 
         obs = np.concatenate(parts).astype(np.float32)
 
@@ -626,22 +690,22 @@ class URReachEnv:
     def _resample_goal(self) -> None:
         """Sample a fresh goal and update the marker (mid-episode)."""
         self.goal_pos = self._sample_goal()
-        self.goal_yaw = float(self._rng.uniform(-math.pi, math.pi))
-        self._place_goal_marker(self.goal_pos, self.goal_yaw)
+        self.goal_quat = self._sample_goal_quat()
+        self._place_goal_marker(self.goal_pos, self.goal_quat)
 
     def _compute_reward(self) -> Tuple[float, bool, Dict]:
         dist = self._ee_goal_dist()
-        yaw_err = abs(self._yaw_error())    # [0, π]
+        ori_err_mag = self._orientation_error_magnitude()  # [0, π]
 
         # ══════════════════════════════════════════════════════════════
         # Hold-then-resample
         # ──────────────────────────────────────────────────────────────
         # Resample a new goal only when the EE reaches the current
-        # goal (within reach_threshold & yaw_threshold) AND holds
+        # goal (within reach_threshold & ori_threshold) AND holds
         # there for hold_steps consecutive steps.
         # ══════════════════════════════════════════════════════════════
         goal_resampled = False
-        inside = dist < self.reach_threshold and yaw_err < self.yaw_threshold
+        inside = dist < self.reach_threshold and ori_err_mag < self.ori_threshold
         if inside:
             self._hold_counter += 1
             self._holding = True
@@ -660,34 +724,35 @@ class URReachEnv:
 
         # ---- Dense reward (Isaac Lab style) ----
         # Position: negative L2 tracking + fine-grained tanh bonus
-        # Orientation: negative L1 yaw error
+        # Orientation: negative angular error magnitude
         pos_reward_coarse = -0.2 * dist
         pos_reward_fine = 0.1 * (1.0 - math.tanh(dist / 0.1))
-        yaw_reward = -0.1 * yaw_err
+        ori_reward = -0.1 * ori_err_mag
 
         # ---- Hold bonus: reward for staying at the goal ----
         # Makes "stay still at goal" strictly better than "oscillate near it"
         if inside:
             closeness = 1.0 - (dist / self.reach_threshold)
-            yaw_closeness = 1.0 - (yaw_err / self.yaw_threshold)
-            hold_bonus = 0.3 * closeness * yaw_closeness
+            ori_closeness = 1.0 - (ori_err_mag / self.ori_threshold)
+            hold_bonus = 0.3 * closeness * ori_closeness
         else:
             hold_bonus = 0.0
 
         # ---- Velocity damping near goal ----
         # Penalise fast joint motion when close — teaches the policy
         # to decelerate on approach instead of overshooting.
-        if dist < 0.1:
+        damp_radius = self.reach_threshold * 3.0
+        if dist < damp_radius:
             jvel_near = sum(self.data.qvel[d] ** 2 for d in self.robot_dofs)
-            proximity = 1.0 - (dist / 0.1)  # 0 at 10 cm, 1 at 0 cm
-            vel_damping = -0.05 * proximity * jvel_near
+            proximity = 1.0 - (dist / damp_radius)   # 0 at edge, 1 at centre
+            vel_damping = -0.15 * proximity * jvel_near
         else:
             vel_damping = 0.0
 
         reward = (
             pos_reward_coarse
             + pos_reward_fine
-            + yaw_reward
+            + ori_reward
             + hold_bonus
             + vel_damping
         )
@@ -717,7 +782,7 @@ class URReachEnv:
 
         info = {
             "dist": dist,
-            "yaw_err": yaw_err,
+            "ori_err": ori_err_mag,
             "inside_threshold": inside,
             "holding": self._holding,
             "hold_progress": self._hold_counter / max(1, self.hold_steps),
@@ -725,9 +790,9 @@ class URReachEnv:
             "goals_reached": self._goals_reached,
             "self_collisions": self._self_collision_count,
             "ee_pos": self.data.site_xpos[self.ee_site].copy(),
-            "ee_yaw": self._ee_yaw(),
+            "ee_quat": self._ee_quat(),
             "goal_pos": self.goal_pos.copy(),
-            "goal_yaw": self.goal_yaw,
+            "goal_quat": self.goal_quat.copy(),
         }
         return float(reward), done, info
 
@@ -737,8 +802,9 @@ class URReachEnv:
 
         Parameters
         ----------
-        action : array-like, shape (4,) or (6,)
-            Cartesian mode: ``[dx, dy, dz, dyaw]`` each in [-1, 1].
+        action : array-like, shape (6,)
+            Cartesian mode: ``[dx, dy, dz, dwx, dwy, dwz]`` each in [-1, 1].
+              First 3 = linear velocity, last 3 = angular velocity (axis-angle).
             Joint mode: 6 joint-position offsets each in [-1, 1].
 
         Returns
@@ -751,30 +817,45 @@ class URReachEnv:
             raise ValueError(f"Expected action dim {self.action_dim}, got {act.shape[0]}")
         act = np.clip(act, -1.0, 1.0)
 
-        # ---- Action suppression when holding at goal ----
-        # If we're inside the threshold and accumulating hold time,
-        # dampen the action so the arm naturally stays put instead of
-        # overshooting.  The deeper into the hold phase, the stronger
-        # the suppression (scales from 0.3× to 0.05× over hold_steps).
+        # ---- Action suppression near / at goal ----
+        # Two-stage damping:
+        #  1. Proximity damping:  ramp action down as EE approaches the
+        #     goal (starts at 2× reach_threshold).  This prevents the
+        #     arm from arriving with too much momentum.
+        #  2. Hold damping:  once inside the threshold and accumulating
+        #     hold time, progressively suppress actions toward zero so
+        #     the arm stays still.
+        dist_now = self._ee_goal_dist()
+        approach_radius = self.reach_threshold * 2.0
+        if dist_now < approach_radius:
+            # Proximity factor: 1.0 at 2×threshold → 0.3 at threshold
+            prox_t = dist_now / approach_radius           # 1→0
+            prox_dampen = 0.3 + 0.7 * prox_t              # 0.3→1.0
+        else:
+            prox_dampen = 1.0
+
         if self._holding and self._hold_counter > 0:
             hold_frac = min(1.0, self._hold_counter / max(1, self.hold_steps))
-            dampen = 0.3 * (1.0 - hold_frac) + 0.05 * hold_frac
-            act = act * dampen
+            hold_dampen = 0.25 * (1.0 - hold_frac) + 0.02 * hold_frac
+            dampen = min(prox_dampen, hold_dampen)
+        else:
+            dampen = prox_dampen
+        act = act * dampen
 
         # Track actions for action-rate penalty
         self._prev_action = self._last_action.copy()
         self._last_action = act.astype(np.float32).copy()
 
         prev_targets = self._last_targets.copy()
-        prev_yaw = self._target_yaw
+        prev_quat = self._target_quat.copy()
 
         if self.action_mode == "cartesian":
             # --- Cartesian IK path ---
             delta_pos = act[:3] * self.ee_step
-            dyaw = act[3] * self.yaw_step
+            delta_ori = act[3:6] * self.ori_step  # axis-angle increment
 
-            target_pos, target_yaw = self._desired_ee(delta_pos, dyaw)
-            qvel_cmd = self._ik_cartesian(target_pos, target_yaw)
+            target_pos, target_quat = self._desired_ee(delta_pos, delta_ori)
+            qvel_cmd = self._ik_cartesian(target_pos, target_quat)
             qvel_cmd = np.clip(qvel_cmd, -self.max_joint_vel, self.max_joint_vel)
 
             ik_gain = 0.15
@@ -785,6 +866,13 @@ class URReachEnv:
         else:
             # --- Joint-space offsets (Isaac Lab style) ---
             qpos_targets = self._last_targets + act * self.joint_action_scale
+
+        # ---- EMA smoothing near goal ----
+        # When close to the goal, blend new targets with the previous
+        # targets to eliminate high-frequency jitter.
+        if dist_now < approach_radius:
+            alpha = 0.3 + 0.7 * (dist_now / approach_radius)  # 0.3→1.0
+            qpos_targets = alpha * qpos_targets + (1.0 - alpha) * prev_targets
 
         qpos_targets = self._clamp_to_limits(qpos_targets)
         self._last_targets = qpos_targets.copy()
@@ -801,7 +889,7 @@ class URReachEnv:
         # Revert on collision — also zero velocities to prevent explosion
         if self._self_collision_count > 0:
             self._last_targets = prev_targets
-            self._target_yaw = prev_yaw
+            self._target_quat = prev_quat
             for k, act_id in enumerate(self.robot_actuators):
                 self.data.ctrl[act_id] = prev_targets[k]
             # Zero out joint velocities to prevent residual forces
