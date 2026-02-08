@@ -140,7 +140,7 @@ print(f"EE pos: {result.info['ee_pos']}, dist: {result.info['dist']:.3f}")
 
 ### Reach Task
 
-Move the end-effector to a random 3-D goal (translucent red sphere). One goal per episode — the episode terminates on success or time-out.
+Move the end-effector to a random 3-D goal **position and yaw orientation** (red cube with RGB coordinate axes). The episode terminates when both the position and heading are matched, or on time-out.
 
 | UR5e | UR3e |
 |------|------|
@@ -170,7 +170,7 @@ Each robot MJCF uses a **dual-geom architecture** for robust collision handling:
 
 | Environment | Action Dim | Obs Dim | Description |
 |-------------|-----------|---------|-------------|
-| `URReachEnv` | 4 | 23 | Move EE to random 3-D goals |
+| `URReachEnv` | 4 | 25 | Move EE to random 3-D pose (pos + yaw) |
 | `URSlotSorterEnv` | 5 | 71 | Pick colored objects → matching slots |
 
 Both environments use:

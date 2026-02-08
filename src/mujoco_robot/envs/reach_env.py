@@ -1,8 +1,9 @@
-"""URReachEnv — 3-D position-reaching task for RL.
+"""URReachEnv — 3-D position + yaw reaching task for RL.
 
 The task: move the end-effector of a 6-DOF UR arm to a random
-goal position in the workspace.  A translucent red sphere shows the
-target; the episode is successful when the EE reaches it.
+goal position **and** match a target yaw orientation.  A red arrow
+shows the target pose; the episode succeeds when the EE reaches
+the arrow’s base with the correct heading.
 
 RL usage (Gymnasium)::
 
@@ -89,8 +90,8 @@ class ReachGymnasium(gymnasium.Env):
             -np.inf, np.inf, shape=(self.base.observation_dim,), dtype=np.float32
         )
         self.render_mode = "rgb_array" if render else None
-        assert self.observation_space.shape[0] == 23, (
-            f"Expected obs dim 23, got {self.observation_space.shape[0]}"
+        assert self.observation_space.shape[0] == 25, (
+            f"Expected obs dim 25, got {self.observation_space.shape[0]}"
         )
 
     def reset(self, *, seed: int | None = None, options=None):
@@ -130,7 +131,7 @@ class URReachEnv:
     Action space (4-D, continuous [-1, 1]):
         ``[dx, dy, dz, dyaw]`` — Cartesian EE velocity commands.
 
-    Observation (23-D):
+    Observation (25-D):
         ============= ===== ===================================
         Component     Dim   Description
         ============= ===== ===================================
@@ -139,16 +140,19 @@ class URReachEnv:
         ee_pos          3   end-effector world position
         ee_yaw          1   end-effector yaw angle
         goal_pos        3   target world position
+        goal_yaw        1   target yaw angle
         goal_direction  3   unit vector from EE to goal
+        yaw_error       1   signed yaw difference (wrapped)
         collision       1   1.0 if self-collision, else 0.0
         ============= ===== ===================================
-        → total = 23
+        → total = 25
 
     Reward:
-        Dense shaping: ``1 − dist/init_dist`` (normalised to [0, 1]) minus
-        a small time penalty and collision penalty.  A +5 bonus is given
-        when the goal is reached.  Each episode has **one goal** and
-        terminates on success or time-out.
+        Dense shaping based on position distance and yaw alignment.
+        ``0.7 * (1 − dist/init_dist) + 0.3 * (1 − |yaw_err|/π)``
+        with time penalty, collision penalty, and a +5 bonus when
+        both position and yaw thresholds are met.  One goal per
+        episode, terminates on success or time-out.
 
     Parameters
     ----------
@@ -180,6 +184,7 @@ class URReachEnv:
         ee_step: float = 0.06,
         yaw_step: float = 0.5,
         reach_threshold: float = 0.06,
+        yaw_threshold: float = 0.35,
         render_size: Tuple[int, int] = (960, 720),
         seed: Optional[int] = None,
     ) -> None:
@@ -197,6 +202,7 @@ class URReachEnv:
         self.ee_step = ee_step
         self.yaw_step = yaw_step
         self.reach_threshold = reach_threshold
+        self.yaw_threshold = yaw_threshold
         self.render_size = render_size
 
         # Physics / control tuning
@@ -242,7 +248,7 @@ class URReachEnv:
             self.model, mujoco.mjtObj.mjOBJ_SITE, "goal_site"
         )
         self.goal_geom = mujoco.mj_name2id(
-            self.model, mujoco.mjtObj.mjOBJ_GEOM, "goal_sphere"
+            self.model, mujoco.mjtObj.mjOBJ_GEOM, "goal_cube"
         )
 
         self.robot_joints = [
@@ -289,8 +295,10 @@ class URReachEnv:
         # State
         self._last_targets = self.init_q.copy()
         self.goal_pos = np.zeros(3)
+        self.goal_yaw = 0.0
         self.step_id = 0
         self._init_dist = 1.0
+        self._init_yaw_err = math.pi
         self._goals_reached = 0
 
     # -------------------------------------------------------------- Properties
@@ -301,12 +309,13 @@ class URReachEnv:
 
     @property
     def observation_dim(self) -> int:
-        """Observation dimensionality (23).
+        """Observation dimensionality (25).
 
         6 joint_pos + 6 joint_vel + 3 ee_pos + 1 ee_yaw
-        + 3 goal_pos + 3 goal_direction (unit vector) + 1 collision = 23
+        + 3 goal_pos + 1 goal_yaw + 3 goal_direction
+        + 1 yaw_error + 1 collision = 25
         """
-        return 23
+        return 25
 
     # -------------------------------------------------------------- Reset
     def reset(self, seed: Optional[int] = None) -> np.ndarray:
@@ -334,12 +343,14 @@ class URReachEnv:
 
         # Sample goal — must be reachable and not too close to current EE
         self.goal_pos = self._sample_goal()
-        self._place_goal_marker(self.goal_pos)
+        self.goal_yaw = float(self._rng.uniform(-math.pi, math.pi))
+        self._place_goal_marker(self.goal_pos, self.goal_yaw)
 
         for _ in range(self.settle_steps):
             mujoco.mj_step(self.model, self.data)
 
         self._init_dist = self._ee_goal_dist()
+        self._init_yaw_err = abs(self._yaw_error())
         return self._observe()
 
     def _sample_goal(self) -> np.ndarray:
@@ -377,10 +388,20 @@ class URReachEnv:
         # Fallback — safe position in front of the robot
         return self._BASE_POS + np.array([0.25, 0.0, 0.30])
 
-    def _place_goal_marker(self, pos: np.ndarray) -> None:
-        """Move the goal sphere to the desired position."""
+    def _place_goal_marker(self, pos: np.ndarray, yaw: float = 0.0) -> None:
+        """Move and rotate the goal arrow to the desired pose.
+
+        The arrow body’s +X axis is rotated to point along ``yaw``
+        (rotation about world Z).
+        """
         body_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, "goal_body")
         self.model.body_pos[body_id] = pos
+        # Quaternion for rotation about Z by `yaw`:
+        #   quat = [cos(yaw/2), 0, 0, sin(yaw/2)]
+        half = yaw / 2.0
+        self.model.body_quat[body_id] = [
+            math.cos(half), 0.0, 0.0, math.sin(half)
+        ]
         mujoco.mj_forward(self.model, self.data)
 
     # -------------------------------------------------------------- IK + control
@@ -412,6 +433,11 @@ class URReachEnv:
             self.data.site_xpos[self.ee_site] - self.goal_pos
         ))
 
+    def _yaw_error(self) -> float:
+        """Signed yaw error wrapped to [-π, π]."""
+        err = self.goal_yaw - self._ee_yaw()
+        return float((err + math.pi) % (2 * math.pi) - math.pi)
+
     def _observe(self) -> np.ndarray:
         parts: List[np.ndarray] = []
         for j in self.robot_joints:
@@ -423,34 +449,39 @@ class URReachEnv:
         parts.append(self.data.site_xpos[self.ee_site].copy())
         parts.append(np.array([self._ee_yaw()]))
         parts.append(self.goal_pos.copy())
-        # Direction from EE to goal (normalised) — makes it trivial for
-        # the policy to know *which way* to move.
+        parts.append(np.array([self.goal_yaw]))
+        # Direction from EE to goal (normalised)
         ee2goal = self.goal_pos - self.data.site_xpos[self.ee_site]
         d = np.linalg.norm(ee2goal)
         direction = ee2goal / max(d, 1e-6)
         parts.append(direction)
+        # Signed yaw error (wrapped to [-π, π])
+        parts.append(np.array([self._yaw_error()]))
         parts.append(np.array([float(self._self_collision_count > 0)]))
         return np.concatenate(parts).astype(np.float32)
 
     # -------------------------------------------------------------- Reward
     def _compute_reward(self) -> Tuple[float, bool, Dict]:
         dist = self._ee_goal_dist()
-        reached = dist < self.reach_threshold
+        yaw_err = abs(self._yaw_error())    # [0, π]
 
-        # ---- Simple, PPO-friendly dense reward ----
-        # Normalise distance by initial distance so reward is always in
-        # a comparable range regardless of where the goal was sampled.
-        normed = dist / max(self._init_dist, 1e-6)
-        reward = 1.0 - normed                       # 1.0 at goal, ≤0 far away
+        pos_ok = dist < self.reach_threshold
+        yaw_ok = yaw_err < self.yaw_threshold
+        reached = pos_ok and yaw_ok
 
-        # Small time penalty — encourages reaching quickly
+        # ---- Dense reward: position (70%) + yaw (30%) ----
+        pos_reward = 1.0 - dist / max(self._init_dist, 1e-6)
+        yaw_reward = 1.0 - yaw_err / max(self._init_yaw_err, 1e-6)
+        reward = 0.7 * pos_reward + 0.3 * yaw_reward
+
+        # Small time penalty
         reward -= 0.005
 
         # Self-collision penalty
         if self._self_collision_count > 0:
             reward -= 0.5
 
-        # Reach bonus + terminate episode
+        # Reach bonus (position + yaw)
         if reached:
             reward += 5.0
             self._goals_reached += 1
@@ -460,11 +491,16 @@ class URReachEnv:
 
         info = {
             "dist": dist,
+            "yaw_err": yaw_err,
             "reached": reached,
+            "pos_ok": pos_ok,
+            "yaw_ok": yaw_ok,
             "goals_reached": self._goals_reached,
             "self_collisions": self._self_collision_count,
             "ee_pos": self.data.site_xpos[self.ee_site].copy(),
+            "ee_yaw": self._ee_yaw(),
             "goal_pos": self.goal_pos.copy(),
+            "goal_yaw": self.goal_yaw,
             "is_success": reached,
         }
         return float(reward), done, info
