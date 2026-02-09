@@ -76,6 +76,42 @@ def quat_unique(q: np.ndarray) -> np.ndarray:
     return -q if q[0] < 0 else q.copy()
 
 
+def quat_to_rot6d(q: np.ndarray) -> np.ndarray:
+    """Convert unit quaternion (w,x,y,z) to the 6-D rotation representation.
+
+    Returns the first two columns of the rotation matrix, flattened to
+    a 6-D vector.  This is the minimal *continuous* representation of
+    SO(3) — see Zhou et al., "On the Continuity of Rotation
+    Representations in Neural Networks" (CVPR 2019).
+
+    Unlike quaternions, this representation has **no discontinuities**
+    (no double-cover / sign-flip problem), which makes it much easier
+    for neural networks to learn from.
+    """
+    w, x, y, z = q
+    # First column of rotation matrix
+    r1 = np.array([
+        1 - 2*(y*y + z*z),
+        2*(x*y + w*z),
+        2*(x*z - w*y),
+    ])
+    # Second column of rotation matrix
+    r2 = np.array([
+        2*(x*y - w*z),
+        1 - 2*(x*x + z*z),
+        2*(y*z + w*x),
+    ])
+    return np.concatenate([r1, r2])
+
+
+def rot_mat_to_rot6d(mat3x3: np.ndarray) -> np.ndarray:
+    """Extract the 6-D continuous rotation from a 3×3 rotation matrix.
+
+    Returns the first two columns flattened: ``[r00,r10,r20, r01,r11,r21]``.
+    """
+    return np.concatenate([mat3x3[:, 0], mat3x3[:, 1]])
+
+
 def axis_angle_from_quat(q: np.ndarray) -> np.ndarray:
     """Convert unit quaternion (w,x,y,z) to axis-angle (3-D) vector.
 
@@ -133,6 +169,11 @@ class IKController:
         Indices into ``model.nv`` for the robot joints.
     damping : float
         Damping factor for the pseudo-inverse (``lambda``).
+    position_weight : float
+        Multiplier on position error relative to orientation error
+        in the IK target vector.  A value > 1 makes the solver
+        prioritise reaching the target position over matching
+        orientation.  Default 5.0 (position is 5× more important).
     """
 
     def __init__(
@@ -142,12 +183,14 @@ class IKController:
         ee_site: int,
         robot_dofs: list[int],
         damping: float = 0.02,
+        position_weight: float = 5.0,
     ) -> None:
         self.model = model
         self.data = data
         self.ee_site = ee_site
         self.robot_dofs = robot_dofs
         self.damping = damping
+        self.position_weight = position_weight
 
     # ------------------------------------------------------------------ API
     def ee_position(self) -> np.ndarray:
@@ -188,10 +231,26 @@ class IKController:
         pos_err = target_pos - self.data.site_xpos[self.ee_site]
         ori_err = orientation_error_axis_angle(self.ee_quat(), target_quat)
 
-        target_vec = np.concatenate([pos_err, ori_err])  # (6,)
+        # Clamp orientation error magnitude so it doesn't dominate the
+        # IK solve and produce wild wrist velocities.  Large orientation
+        # errors (>1 rad) produce huge rotational demands that drown
+        # out position tracking in the 6×6 system.  Clamping to
+        # ``max_ori_err`` lets the solver make incremental progress on
+        # orientation without sacrificing position accuracy.
+        max_ori_err = 0.5  # radians — max orientation error per solve
+        ori_mag = np.linalg.norm(ori_err)
+        if ori_mag > max_ori_err:
+            ori_err = ori_err * (max_ori_err / ori_mag)
+
+        # Weight position error so the solver prioritises position
+        # tracking over orientation when both are far from target.
+        w = self.position_weight
         cols = self.robot_dofs
-        # Full 6×n Jacobian: position (3 rows) + rotation (3 rows)
-        J = np.vstack([jacp[:, cols], jacr[:, cols]])  # (6, n_joints)
+        J_pos = jacp[:, cols] * w        # (3, n_joints)
+        J_rot = jacr[:, cols]            # (3, n_joints)
+        J = np.vstack([J_pos, J_rot])    # (6, n_joints)
+
+        target_vec = np.concatenate([pos_err * w, ori_err])  # (6,)
 
         lam = self.damping
         JJT = J @ J.T + (lam ** 2) * np.eye(6)

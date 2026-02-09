@@ -26,6 +26,11 @@ def main():
         choices=["ur3e", "ur5e"],
         help="Robot model for reach task (default: ur3e).",
     )
+    p.add_argument(
+        "--control-variant", type=str, default="ik_rel",
+        choices=["ik_rel", "ik_abs", "joint_pos"],
+        help="Reach control variant (default: ik_rel).",
+    )
     p.add_argument("--total-timesteps", type=int, default=500_000)
     p.add_argument("--n-envs", type=int, default=8)
     p.add_argument("--save-video", action=argparse.BooleanOptionalAction, default=True)
@@ -37,6 +42,7 @@ def main():
         from mujoco_robot.training.train_reach import train_reach_ppo
         train_reach_ppo(
             robot=args.robot,
+            control_variant=args.control_variant,
             total_timesteps=args.total_timesteps,
             n_envs=args.n_envs,
             save_video=args.save_video,

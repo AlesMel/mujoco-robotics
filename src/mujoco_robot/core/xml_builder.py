@@ -163,13 +163,25 @@ def inject_ee_axes(
     # Remove the old sphere
     wrist3.remove(ee_sphere)
 
-    # Add a child body at the ee_sphere position with RGB axes.
-    # No local rotation — the axes show the raw tool-flange frame
-    # so they match the goal axes when the full orientation is aligned.
-    ee_frame = ET.SubElement(wrist3, "body", {
+    # Read the ee_site's local quaternion so the visual axes match the
+    # frame that is actually measured by site_xmat.  Without this the
+    # RGB axes show the raw wrist3 body orientation which differs from
+    # the ee_site orientation by the site's local rotation — making it
+    # look like orientation tracking is broken.
+    ee_site_quat = None
+    for site in wrist3.findall("site"):
+        if site.get("name") == "ee_site":
+            ee_site_quat = site.get("quat")
+            break
+
+    ee_frame_attrs = {
         "name": "ee_frame",
         "pos": ee_pos,
-    })
+    }
+    if ee_site_quat is not None:
+        ee_frame_attrs["quat"] = ee_site_quat
+
+    ee_frame = ET.SubElement(wrist3, "body", ee_frame_attrs)
     axis_len = round(reach_threshold * 2.5, 4)
     axis_rad = round(reach_threshold * 0.12, 4)
     _add_axes_frame(ee_frame, "ee", axis_len, axis_rad, alpha=0.7)

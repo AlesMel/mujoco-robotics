@@ -17,6 +17,7 @@ from stable_baselines3 import PPO
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecNormalize
 
+from mujoco_robot.envs.reach import REACH_VARIANTS
 from mujoco_robot.envs.reach_env import ReachGymnasium
 from mujoco_robot.training.callbacks import BestEpisodeVideoCallback
 
@@ -29,10 +30,10 @@ def train_reach_ppo(
     log_name: str = "reach_ppo",
     save_video: bool = True,
     save_video_every: int = 50_000,
-    action_mode: str = "joint",
+    control_variant: str = "ik_rel",
+    action_mode: str | None = None,
     reach_threshold: float = 0.05,
     ori_threshold: float = 0.35,
-    hold_seconds: float = 2.0,
 ):
     """Quick-start PPO training on the reach task.
 
@@ -52,41 +53,56 @@ def train_reach_ppo(
         Whether to record periodic eval videos.
     save_video_every : int
         Training timesteps between video recordings.
-    action_mode : str
-        ``"cartesian"`` (6-D IK) or ``"joint"`` (6-D joint offsets).
+    control_variant : str
+        Reach control variant key from :data:`mujoco_robot.envs.reach.REACH_VARIANTS`.
+    action_mode : str | None
+        Backward-compatible alias. ``"cartesian"`` maps to ``"ik_rel"``,
+        ``"joint"`` maps to ``"joint_pos"``.
     reach_threshold : float
         Position distance (m) within which the EE counts as "at goal".
     ori_threshold : float
         Orientation error (rad) within which orientation counts as matched.
-    hold_seconds : float
-        Seconds the EE must stay within both thresholds before the
-        goal is resampled.  Set to 0 for instant resample on reach.
 
     Returns
     -------
     PPO
         Trained model.
     """
+    if action_mode is not None:
+        alias = {"cartesian": "ik_rel", "joint": "joint_pos"}
+        if action_mode not in alias:
+            raise ValueError(
+                f"action_mode must be one of {tuple(alias)}, got '{action_mode}'"
+            )
+        mapped_variant = alias[action_mode]
+        if control_variant != "ik_rel" and control_variant != mapped_variant:
+            raise ValueError(
+                "Conflicting inputs: action_mode implies "
+                f"'{mapped_variant}' but control_variant is '{control_variant}'."
+            )
+        control_variant = mapped_variant
+
     env_kwargs = dict(
+        control_variant=control_variant,
         reach_threshold=reach_threshold,
         ori_threshold=ori_threshold,
-        hold_seconds=hold_seconds,
     )
 
     print(f"\n{'='*50}")
     print(f"  Reach training config")
     print(f"  Robot:            {robot}")
-    print(f"  Action mode:      {action_mode}")
+    print(f"  Control variant:  {control_variant}")
     print(f"  Reach threshold:  {reach_threshold:.3f} m")
     print(f"  Ori threshold:    {ori_threshold:.2f} rad")
-    print(f"  Hold time:        {hold_seconds:.1f} s")
+    if control_variant == "joint_pos_isaac_reward":
+        print("  Episode setup:    built-in Isaac-style defaults (3s, 4s command)")
     print(f"  Total timesteps:  {total_timesteps:,}")
     print(f"{'='*50}\n")
 
     def make_env(rank):
         def _init():
             return Monitor(ReachGymnasium(
-                robot=robot, seed=rank, action_mode=action_mode,
+                robot=robot, seed=rank,
                 **env_kwargs,
             ))
         return _init
@@ -99,7 +115,7 @@ def train_reach_ppo(
     if save_video:
         def make_eval_env():
             return Monitor(ReachGymnasium(
-                robot=robot, render_mode="rgb_array", action_mode=action_mode,
+                robot=robot, render_mode="rgb_array",
                 **env_kwargs,
             ))
 
@@ -115,9 +131,10 @@ def train_reach_ppo(
         callbacks.append(video_cb)
 
     # PPO config aligned with Isaac Lab reach task:
-    #   - [64, 64] network (sufficient for ~30-D obs)
+    #   - [128, 128] network (larger net needed for full orientation
+    #     control — 43-D obs with 6-D continuous rotations)
     #   - batch_size = n_steps * n_envs / 4  (4 minibatches)
-    #   - LR 1e-3 matches Isaac Lab UR10 reach
+    #   - LR 3e-4 (slightly lower than before for stable orientation learning)
     #   - entropy 0.01 encourages exploration early on
     n_steps = 2048
     n_minibatches = 4
@@ -129,14 +146,15 @@ def train_reach_ppo(
         n_steps=n_steps,
         batch_size=batch_size,
         n_epochs=8,
-        learning_rate=1e-3,
+        learning_rate=3e-4,
         gamma=0.99,
         gae_lambda=0.95,
         ent_coef=0.01,
         clip_range=0.2,
         vf_coef=1.0,
         max_grad_norm=1.0,
-        policy_kwargs=dict(net_arch=dict(pi=[64, 64], vf=[64, 64])),
+        device="cpu",
+        policy_kwargs=dict(net_arch=dict(pi=[128, 128], vf=[128, 128])),
         verbose=1,
         tensorboard_log=log_dir,
     )
@@ -159,15 +177,19 @@ def main():
                     choices=list(ROBOT_CONFIGS.keys()))
     p.add_argument("--total-timesteps", type=int, default=500_000)
     p.add_argument("--n-envs", type=int, default=16)
-    p.add_argument("--action-mode", type=str, default="joint",
+    p.add_argument("--control-variant", type=str, default="ik_rel",
+                    choices=sorted(REACH_VARIANTS.keys()),
+                    help=(
+                        "Control variant. Available: "
+                        + ", ".join(sorted(REACH_VARIANTS.keys()))
+                    ))
+    p.add_argument("--action-mode", type=str, default=None,
                     choices=["cartesian", "joint"],
-                    help="Action mode: 'cartesian' (6-D IK) or 'joint' (6-D offsets)")
+                    help="Deprecated alias. cartesian->ik_rel, joint->joint_pos.")
     p.add_argument("--reach-threshold", type=float, default=0.05,
                     help="Position tolerance for goal reached (metres, default: 0.05)")
     p.add_argument("--ori-threshold", type=float, default=0.35,
                     help="Orientation tolerance for goal reached (radians, default: 0.35)")
-    p.add_argument("--hold-seconds", type=float, default=2.0,
-                    help="Seconds to hold at goal before resample (default: 2.0)")
     p.add_argument("--save-video", action=argparse.BooleanOptionalAction, default=True)
     p.add_argument("--save-video-every", type=int, default=50_000)
     args = p.parse_args()
@@ -178,10 +200,10 @@ def main():
         n_envs=args.n_envs,
         save_video=args.save_video,
         save_video_every=args.save_video_every,
+        control_variant=args.control_variant,
         action_mode=args.action_mode,
         reach_threshold=args.reach_threshold,
         ori_threshold=args.ori_threshold,
-        hold_seconds=args.hold_seconds,
     )
 
 
