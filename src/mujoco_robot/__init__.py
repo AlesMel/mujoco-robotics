@@ -68,5 +68,6 @@ gymnasium.register(
         "ReachJointPosIsaacRewardGymnasium"
     ),
     # Isaac-inspired joint-pos reward setup uses ~3.0 s episodes by default.
-    max_episode_steps=94,
+    # 3.0 s / (0.005 s * 4 substeps) = 150 control steps.
+    max_episode_steps=150,
 )

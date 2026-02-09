@@ -217,7 +217,7 @@ class URReachEnvBase:
         self.terminate_on_collision = terminate_on_collision
         if goal_resample_interval is not None:
             # Backward compatibility for old step-count API.
-            default_step_dt = 0.002 * 16
+            default_step_dt = 0.005 * 4
             fixed_s = float(goal_resample_interval) * default_step_dt
             self.goal_resample_time_range_s = (fixed_s, fixed_s)
         else:
@@ -248,7 +248,7 @@ class URReachEnvBase:
         self.max_joint_vel = 4.0
         self.ik_damping = 0.02
         self.hold_eps = 0.05
-        self.n_substeps = 16
+        self.n_substeps = 4
         self.settle_steps = 300
 
         # Robot-specific home pose and workspace bounds
@@ -264,7 +264,7 @@ class URReachEnvBase:
         self.data = mujoco.MjData(self.model)
 
         # Solver settings
-        self.model.opt.timestep = 0.002
+        self.model.opt.timestep = 0.005
         self.model.opt.integrator = mujoco.mjtIntegrator.mjINT_IMPLICITFAST
         self.model.opt.iterations = max(self.model.opt.iterations, 50)
         self.model.opt.gravity[:] = [0.0, 0.0, -9.81]

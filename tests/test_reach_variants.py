@@ -178,7 +178,8 @@ def test_joint_pos_isaac_reward_defaults_do_not_resample_within_episode() -> Non
     )
     env.reset(seed=0)
 
-    assert env.base.time_limit == 94
+    step_dt = env.base.model.opt.timestep * env.base.n_substeps
+    assert env.base.time_limit == int(round(3.0 / step_dt))
 
     zero = np.zeros(env.action_space.shape, dtype=np.float32)
     any_resample = False
@@ -191,4 +192,22 @@ def test_joint_pos_isaac_reward_defaults_do_not_resample_within_episode() -> Non
     assert terminated is False
     assert truncated is True
     assert any_resample is False
+    env.close()
+
+
+def test_joint_pos_isaac_reward_control_defaults_match_isaac_style() -> None:
+    """Isaac-style variant should use direct, no-deadzone relative joint targets."""
+    env = URReachEnv(
+        robot="ur3e",
+        control_variant="joint_pos_isaac_reward",
+        time_limit=0,
+        randomize_init=False,
+        seed=0,
+    )
+    env.reset(seed=0)
+
+    assert env.joint_action_scale == pytest.approx(0.5)
+    assert env.hold_eps == pytest.approx(0.0)
+    assert env._ema_alpha == pytest.approx(1.0)
+
     env.close()

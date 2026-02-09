@@ -29,7 +29,7 @@ def main():
     p.add_argument("--total-timesteps", type=int, default=500_000)
     p.add_argument("--n-envs", type=int, default=8)
     p.add_argument("--save-video", action=argparse.BooleanOptionalAction, default=True)
-    p.add_argument("--save-video-every", type=int, default=50_000)
+    p.add_argument("--save-video-every", type=int, default=100_000)
     p.add_argument("--learning-rate", type=float, default=3e-4)
     args = p.parse_args()
 

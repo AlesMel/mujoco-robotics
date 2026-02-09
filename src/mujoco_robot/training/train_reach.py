@@ -153,7 +153,7 @@ def train_reach_ppo(
         clip_range=0.2,
         vf_coef=1.0,
         max_grad_norm=1.0,
-        device="cpu",
+        device="cuda",
         policy_kwargs=dict(net_arch=dict(pi=[128, 128], vf=[128, 128])),
         verbose=1,
         tensorboard_log=log_dir,

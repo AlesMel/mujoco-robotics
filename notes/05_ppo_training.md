@@ -303,10 +303,10 @@ Every 2048 steps per env (32,768 total), PPO does an update.
 
 ### Intuition for key parameters
 
-**`gamma = 0.99`**: The agent cares about rewards ~100 steps into the future. With 31 Hz control, that's about 3.2 seconds — enough to plan a reaching motion.
+**`gamma = 0.99`**: The agent cares about rewards ~100 steps into the future. With 50 Hz control, that's about 2.0 seconds — enough to plan a reaching motion.
 
 $$
-\text{effective horizon} = \frac{1}{1 - \gamma} = \frac{1}{0.01} = 100 \text{ steps} \approx 3.2 \text{ seconds}
+\text{effective horizon} = \frac{1}{1 - \gamma} = \frac{1}{0.01} = 100 \text{ steps} \approx 2.0 \text{ seconds}
 $$
 
 **`learning_rate = 1e-3`**: Relatively high — we want fast learning. For larger, more complex tasks, you'd use 3e-4 or lower.

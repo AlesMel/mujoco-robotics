@@ -23,10 +23,13 @@ from mujoco_robot.envs.reach.reach_env_base import ReachGymnasiumBase
 from mujoco_robot.envs.reach.reach_env_joint_pos import ReachJointPosEnv
 
 
-ISAAC_CONTROL_DT_S = 0.002 * 16
+ISAAC_CONTROL_DT_S = 0.005 * 4
 ISAAC_EPISODE_SECONDS = 3.0
 ISAAC_EPISODE_STEPS = int(round(ISAAC_EPISODE_SECONDS / ISAAC_CONTROL_DT_S))
 ISAAC_GOAL_RESAMPLE_TIME_RANGE_S = (4.0, 4.0)
+ISAAC_JOINT_ACTION_SCALE = 0.25
+ISAAC_ACTION_DEADZONE = 0.0
+ISAAC_EMA_ALPHA = 1.0
 
 
 class ReachJointPosIsaacRewardEnv(ReachJointPosEnv):
@@ -35,18 +38,24 @@ class ReachJointPosIsaacRewardEnv(ReachJointPosEnv):
     Defaults are configured to mirror common Isaac Lab reach settings:
     - episode length ~= 3.0 s
     - command resampling window = [4.0, 4.0] s
+    - direct relative joint-position targets (no EMA smoothing)
+    - no action deadzone
     - no task-based termination by default (timeout only)
     """
 
     DEFAULT_TIME_LIMIT = ISAAC_EPISODE_STEPS
+    _ema_alpha = ISAAC_EMA_ALPHA
 
     def __init__(self, robot: str = "ur5e", **kwargs) -> None:
         kwargs.setdefault("time_limit", self.DEFAULT_TIME_LIMIT)
         kwargs.setdefault("goal_resample_time_range_s", ISAAC_GOAL_RESAMPLE_TIME_RANGE_S)
+        kwargs.setdefault("joint_action_scale", ISAAC_JOINT_ACTION_SCALE)
         kwargs.setdefault("terminate_on_success", False)
         kwargs.setdefault("terminate_on_collision", False)
         kwargs.setdefault("hold_seconds", 0.0)
         super().__init__(robot=robot, **kwargs)
+        # Isaac action term has no deadzone around zero.
+        self.hold_eps = ISAAC_ACTION_DEADZONE
 
     def _compute_reward(self) -> Tuple[float, bool, Dict]:
         dist = self._ee_goal_dist()
@@ -55,6 +64,7 @@ class ReachJointPosIsaacRewardEnv(ReachJointPosEnv):
         goal_resampled = self._maybe_resample_goal()
 
         # Isaac Lab reward terms (joint_pos_env_cfg.RewardsCfg).
+        pos_l2 = float(dist)                 # position_command_error (L2 distance)
         pos_tanh = 1.0 - math.tanh(dist / 0.1)
         action_delta = self._last_action - self._prev_action
         action_rate_l2 = float(np.dot(action_delta, action_delta))
@@ -62,7 +72,8 @@ class ReachJointPosIsaacRewardEnv(ReachJointPosEnv):
         joint_vel_l2 = float(np.dot(joint_vel, joint_vel))
 
         reward = (
-            0.1 * pos_tanh
+            - 0.2 * pos_l2
+            + 0.1 * pos_tanh
             - 0.1 * ori_err_mag
             - 1.0e-4 * action_rate_l2
             - 1.0e-4 * joint_vel_l2

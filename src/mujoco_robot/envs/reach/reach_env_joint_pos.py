@@ -56,7 +56,7 @@ class ReachJointPosEnv(URReachEnvBase):
 
     # EMA blending factor for target smoothing.  Lower values produce
     # smoother motion but slower response.  0.3 gives ~95 % convergence
-    # in ≈ 9 steps (≈ 0.3 s at 31 Hz control rate).
+    # in ≈ 9 steps (≈ 0.18 s at 50 Hz control rate).
     _ema_alpha: float = 0.3
 
     def _apply_action(self, action: np.ndarray) -> np.ndarray:

@@ -60,7 +60,7 @@ MuJoCo robots are described in **MJCF** (MuJoCo XML Format). Here's a simplified
   <compiler angle="radian" meshdir="assets/"/>
   
   <!-- Physics options -->
-  <option timestep="0.002" gravity="0 0 -9.81"/>
+  <option timestep="0.005" gravity="0 0 -9.81"/>
 
   <!-- Visual settings -->
   <visual>
@@ -136,7 +136,7 @@ Each body inherits the position/orientation of its parent. When the shoulder rot
 ### The timestep
 
 ```python
-model.opt.timestep = 0.002  # 2 milliseconds per physics step
+model.opt.timestep = 0.005  # 5 milliseconds per physics step
 ```
 
 MuJoCo advances time in fixed increments. Smaller timestep = more accurate physics, but more computation.
@@ -146,10 +146,10 @@ MuJoCo advances time in fixed increments. Smaller timestep = more accurate physi
 We don't call the RL policy at every physics step. Instead:
 
 ```
-1 RL step = 16 physics substeps × 0.002s = 0.032s = 32ms
+1 RL step = 4 physics substeps × 0.005s = 0.020s = 20ms
 ```
 
-This gives us a **control rate of ~31 Hz** (about 31 policy decisions per second).
+This gives us a **control rate of 50 Hz** (50 policy decisions per second).
 
 ```
     RL step 1                    RL step 2
@@ -158,14 +158,14 @@ This gives us a **control rate of ~31 Hz** (about 31 policy decisions per second
     ┌─┬─┬─┬─┬─┬─┬─┬─┬─┬─┬─┬─┬─┬─┬─┬─┐┌─┬─ ...
     │ │ │ │ │ │ │ │ │ │ │ │ │ │ │ │ │ ││ │
     └─┴─┴─┴─┴─┴─┴─┴─┴─┴─┴─┴─┴─┴─┴─┴─┘└─┴─ ...
-     ↑  2ms each = 16 substeps = 32ms
+     ↑  5ms each = 4 substeps = 20ms
 ```
 
 **Why substeps?**
-- Physics needs small timesteps for stability (2ms)
-- But the RL policy only needs to decide every ~30ms
+- Physics needs small timesteps for stability (5ms)
+- But the RL policy only needs to decide every ~20ms
 - This matches real UR robots which accept commands at 10-125 Hz
-- Also matches Isaac Lab's `decimation=2` at 60 Hz sim → ~30 Hz control
+- This corresponds to a 50 Hz control loop for the policy.
 
 ### In code
 
@@ -393,10 +393,10 @@ Hard clamps on the end-effector position. Even if the IK controller wants to sen
 
 | Parameter | Value | Meaning |
 |-----------|-------|---------|
-| `timestep` | 0.002s (2ms) | Physics step size |
-| `n_substeps` | 16 | Physics steps per RL step |
-| `control_dt` | 0.032s (32ms) | Time between RL decisions |
-| `control_rate` | ~31 Hz | RL decisions per second |
+| `timestep` | 0.005s (5ms) | Physics step size |
+| `n_substeps` | 4 | Physics steps per RL step |
+| `control_dt` | 0.020s (20ms) | Time between RL decisions |
+| `control_rate` | 50 Hz | RL decisions per second |
 | `kp` (actuator gain) | 400 N·m/rad | Stiffness of position servos |
 | `damping` | 2.0 N·m·s/rad | Joint viscous friction |
 | `gravity` | 9.81 m/s² | Standard Earth gravity |

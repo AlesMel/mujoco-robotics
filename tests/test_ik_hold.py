@@ -156,7 +156,7 @@ class TestIKHoldHome:
 class TestIKReachAndHold:
     """Drive EE to a target, then hold with zero action — position must stay."""
 
-    POS_TOL = 0.26   # 26 cm — IK + PD controller steady-state (31 Hz, full 6-DOF)
+    POS_TOL = 0.26   # 26 cm — IK + PD controller steady-state (50 Hz, full 6-DOF)
     ORI_TOL = 1.20   # ~69° — full 3-D orientation is harder to match exactly
     HOLD_DRIFT_TOL = 0.02  # max drift during hold phase
 

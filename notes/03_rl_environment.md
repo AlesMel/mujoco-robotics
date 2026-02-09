@@ -245,11 +245,11 @@ Unlike many RL environments that end the episode on success, our environment **n
 
 1. Agent reaches the goal (distance < `reach_threshold` AND orientation error < `ori_threshold`)
 2. A **hold counter** starts counting up
-3. If the agent stays within thresholds for `hold_steps` consecutive steps (~2 seconds at 31 Hz ≈ 62 steps):
+3. If the agent stays within thresholds for `hold_steps` consecutive steps (~2 seconds at 50 Hz ≈ 100 steps):
    - Goal is **resampled** to a new random position and orientation
    - Hold counter resets to 0
 4. If the agent drifts outside the thresholds, the hold counter **gradually decays** (decrements by 3 per step instead of resetting to 0)
-5. The episode only ends when `time_limit` steps are reached (375 steps ≈ 12 seconds)
+5. The episode only ends when `time_limit` steps are reached (375 steps ≈ 7.5 seconds)
 
 ### Why gradual decay?
 
@@ -352,8 +352,8 @@ Here's what happens every time the agent calls `env.step(action)`:
                  │
         ┌────────┴────────────────┐
         │ 7. Physics simulation   │
-        │    (16 substeps × 2ms   │
-        │     = 32ms real time)   │
+        │    (4 substeps × 5ms    │
+        │     = 20ms real time)   │
         └────────┬────────────────┘
                  │
         ┌────────┴────────────────┐

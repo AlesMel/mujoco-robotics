@@ -25,6 +25,9 @@ train = [
     "imageio[ffmpeg]",
     "tensorboard",
 ]
+train-skrl = [
+    "skrl>=1.4",
+]
 gamepad = [
     "pygame",
 ]
@@ -33,7 +36,7 @@ gui = [
 ]
 dev = [
     "pytest>=7.0",
-    "mujoco-robot[train,gamepad,gui]",
+    "mujoco-robot[train,train-skrl,gamepad,gui]",
 ]
 
 [project.scripts]
