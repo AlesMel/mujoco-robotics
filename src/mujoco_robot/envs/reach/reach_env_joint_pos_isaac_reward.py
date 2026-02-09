@@ -14,11 +14,7 @@ step duration ``step_dt``.
 """
 from __future__ import annotations
 
-import math
-from typing import Dict, Tuple
-
-import numpy as np
-
+from mujoco_robot.envs.reach.mdp import ReachMDPCfg, RewardTermCfg, rewards
 from mujoco_robot.envs.reach.reach_env_base import ReachGymnasiumBase
 from mujoco_robot.envs.reach.reach_env_joint_pos import ReachJointPosEnv
 
@@ -57,59 +53,37 @@ class ReachJointPosIsaacRewardEnv(ReachJointPosEnv):
         # Isaac action term has no deadzone around zero.
         self.hold_eps = ISAAC_ACTION_DEADZONE
 
-    def _compute_reward(self) -> Tuple[float, bool, Dict]:
-        dist = self._ee_goal_dist()
-        ori_err_mag = self._orientation_error_magnitude()
-
-        goal_resampled = self._maybe_resample_goal()
-
-        # Isaac Lab reward terms (joint_pos_env_cfg.RewardsCfg).
-        pos_l2 = float(dist)                 # position_command_error (L2 distance)
-        pos_tanh = 1.0 - math.tanh(dist / 0.1)
-        action_delta = self._last_action - self._prev_action
-        action_rate_l2 = float(np.dot(action_delta, action_delta))
-        joint_vel = self.data.qvel[self.robot_dofs]
-        joint_vel_l2 = float(np.dot(joint_vel, joint_vel))
-
-        reward = (
-            - 0.2 * pos_l2
-            + 0.1 * pos_tanh
-            - 0.1 * ori_err_mag
-            - 1.0e-4 * action_rate_l2
-            - 1.0e-4 * joint_vel_l2
+    def _build_default_mdp_cfg(self) -> ReachMDPCfg:
+        cfg = super()._build_default_mdp_cfg()
+        cfg.reward_terms = (
+            RewardTermCfg(
+                name="position_command_error",
+                fn=rewards.position_error_l2,
+                weight=rewards.scaled_by_step_dt(-0.2),
+            ),
+            RewardTermCfg(
+                name="position_command_error_tanh",
+                fn=rewards.position_error_tanh_std_01,
+                weight=rewards.scaled_by_step_dt(0.1),
+            ),
+            RewardTermCfg(
+                name="orientation_command_error",
+                fn=rewards.orientation_error,
+                weight=rewards.scaled_by_step_dt(-0.1),
+            ),
+            RewardTermCfg(
+                name="action_rate_l2",
+                fn=rewards.action_rate_l2,
+                weight=rewards.scaled_by_step_dt(-1.0e-4),
+            ),
+            RewardTermCfg(
+                name="joint_vel_l2",
+                fn=rewards.joint_vel_l2,
+                weight=rewards.scaled_by_step_dt(-1.0e-4),
+            ),
         )
-
-        # Isaac Lab RewardManager integrates rewards over environment step dt.
-        step_dt = self.model.opt.timestep * self.n_substeps
-        reward *= step_dt
-
-        success, failure, terminated, time_up, done = self._compute_done_flags(dist, ori_err_mag)
-
-        info = {
-            "dist": dist,
-            "ori_err": ori_err_mag,
-            "success": success,
-            "failure": failure,
-            "terminated": terminated,
-            "time_out": time_up,
-            "goal_resample_elapsed_s": self._goal_resample_elapsed_s,
-            "goal_resample_target_s": self._next_goal_resample_s,
-            "reward_terms": {
-                "position_command_error_tanh": pos_tanh,
-                "orientation_command_error": ori_err_mag,
-                "action_rate_l2": action_rate_l2,
-                "joint_vel_l2": joint_vel_l2,
-                "step_dt": step_dt,
-            },
-            "goal_resampled": goal_resampled,
-            "goals_reached": self._goals_reached,
-            "self_collisions": self._self_collision_count,
-            "ee_pos": self.data.site_xpos[self.ee_site].copy(),
-            "ee_quat": self._ee_quat(),
-            "goal_pos": self.goal_pos.copy(),
-            "goal_quat": self.goal_quat.copy(),
-        }
-        return float(reward), done, info
+        cfg.include_reward_terms_in_info = True
+        return cfg
 
 
 class ReachJointPosIsaacRewardGymnasium(ReachGymnasiumBase):

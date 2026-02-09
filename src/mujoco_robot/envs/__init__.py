@@ -34,8 +34,8 @@ from mujoco_robot.envs.reach_env import (
     ReachGymnasium,
 )
 
-# --- Slot sorter (unchanged) ---
-from mujoco_robot.envs.slot_sorter_env import URSlotSorterEnv, SlotSorterGymnasium
+# --- Slot sorter ---
+from mujoco_robot.envs.slot_sorter import URSlotSorterEnv, SlotSorterGymnasium
 
 __all__ = [
     # Base

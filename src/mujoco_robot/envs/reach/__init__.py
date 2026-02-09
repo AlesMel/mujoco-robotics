@@ -52,6 +52,14 @@ from mujoco_robot.envs.reach.reach_env_joint_pos_isaac_reward import (
     ReachJointPosIsaacRewardEnv,
     ReachJointPosIsaacRewardGymnasium,
 )
+from mujoco_robot.envs.reach.mdp import (
+    ActionTermCfg,
+    ObservationTermCfg,
+    RewardTermCfg,
+    TerminationTermCfg,
+    ReachMDPCfg,
+    make_default_reach_mdp_cfg,
+)
 
 # Variant registry — maps string keys to (env_cls, gymnasium_cls) pairs
 REACH_VARIANTS = {
@@ -76,5 +84,11 @@ __all__ = [
     "ReachJointPosGymnasium",
     "ReachJointPosIsaacRewardEnv",
     "ReachJointPosIsaacRewardGymnasium",
+    "ActionTermCfg",
+    "ObservationTermCfg",
+    "RewardTermCfg",
+    "TerminationTermCfg",
+    "ReachMDPCfg",
+    "make_default_reach_mdp_cfg",
     "REACH_VARIANTS",
 ]

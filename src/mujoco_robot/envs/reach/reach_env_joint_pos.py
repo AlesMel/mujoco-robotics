@@ -19,13 +19,13 @@ Usage::
 """
 from __future__ import annotations
 
-import mujoco
 import numpy as np
 
 from mujoco_robot.envs.reach.reach_env_base import (
     ReachGymnasiumBase,
     URReachEnvBase,
 )
+from mujoco_robot.envs.reach.mdp import actions
 
 
 class ReachJointPosEnv(URReachEnvBase):
@@ -48,10 +48,9 @@ class ReachJointPosEnv(URReachEnvBase):
 
     def _current_joint_pos(self) -> np.ndarray:
         """Read the actual joint positions from the MuJoCo state."""
-        q = np.empty(len(self.robot_joints))
-        for k, j in enumerate(self.robot_joints):
-            jid = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, j)
-            q[k] = self.data.qpos[self.model.jnt_qposadr[jid]]
+        q = np.empty(len(self._robot_qpos_ids))
+        for i, qpos_adr in enumerate(self._robot_qpos_ids):
+            q[i] = self.data.qpos[qpos_adr]
         return q
 
     # EMA blending factor for target smoothing.  Lower values produce
@@ -60,14 +59,7 @@ class ReachJointPosEnv(URReachEnvBase):
     _ema_alpha: float = 0.3
 
     def _apply_action(self, action: np.ndarray) -> np.ndarray:
-        # Near-zero actions → hold in place (matches IK-rel hold_eps)
-        if np.linalg.norm(action) < self.hold_eps:
-            return self._last_targets.copy()
-        # Isaac Lab: target = current_joint_pos + action * scale
-        raw_target = self._current_joint_pos() + action * self.joint_action_scale
-        # EMA smoothing prevents oscillation near goal (analogous to
-        # Isaac Lab's EMAJointPositionToLimitsAction).
-        return self._ema_alpha * raw_target + (1.0 - self._ema_alpha) * self._last_targets
+        return actions.joint_relative_targets(self, action)
 
 
 class ReachJointPosGymnasium(ReachGymnasiumBase):

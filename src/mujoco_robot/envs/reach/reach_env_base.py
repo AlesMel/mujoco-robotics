@@ -18,17 +18,18 @@ Isaac-Lab-inspired features:
 """
 from __future__ import annotations
 
-import math
-import xml.etree.ElementTree as ET
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Dict, Iterable, Optional, Tuple
 
 import gymnasium
 import mujoco
 import numpy as np
 
-from mujoco_robot.robots.configs import ROBOT_CONFIGS, RobotConfig, get_robot_config
+from mujoco_robot.robots.actuators import (
+    configure_position_actuators,
+    resolve_robot_actuators,
+)
+from mujoco_robot.robots.configs import get_robot_config
 from mujoco_robot.core.ik_controller import (
     IKController,
     orientation_error_axis_angle,
@@ -38,6 +39,14 @@ from mujoco_robot.core.ik_controller import (
 )
 from mujoco_robot.core.collision import CollisionDetector
 from mujoco_robot.core.xml_builder import load_robot_xml, build_reach_xml
+from mujoco_robot.envs.reach.mdp import (
+    ActionManager,
+    ReachMDPCfg,
+    ObservationManager,
+    RewardManager,
+    TerminationManager,
+    make_default_reach_mdp_cfg,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -187,6 +196,7 @@ class URReachEnvBase:
         init_q_range: Tuple[float, float] = (0.75, 1.25),
         render_size: Tuple[int, int] = (960, 720),
         seed: Optional[int] = None,
+        mdp_cfg: ReachMDPCfg | None = None,
     ) -> None:
         self._rng = np.random.default_rng(seed)
 
@@ -291,30 +301,25 @@ class URReachEnvBase:
             self.model, mujoco.mjtObj.mjOBJ_GEOM, "goal_cube"
         )
 
-        self.robot_joints = [
-            "shoulder_pan", "shoulder_lift", "elbow",
-            "wrist1", "wrist2", "wrist3",
-        ]
-        self.robot_actuators = [
-            mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_ACTUATOR, f"{j}_motor")
-            for j in self.robot_joints
-        ]
-        self.robot_dofs = [
-            self.model.jnt_dofadr[
-                mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, j)
-            ]
-            for j in self.robot_joints
-        ]
+        actuator_handles = resolve_robot_actuators(self.model, robot)
+        self.robot_joints = list(actuator_handles.joint_names)
+        self.robot_actuators = list(actuator_handles.actuator_ids)
+        self.robot_dofs = list(actuator_handles.dof_ids)
+        self._robot_joint_ids = list(actuator_handles.joint_ids)
+        self._robot_qpos_ids = list(actuator_handles.qpos_ids)
 
-        # Passive damping — must be high enough to prevent ringing.
-        # With position-servo gain ≈ 400, critical damping requires
-        # b ≈ 2·√(kp·I) ≈ 40 for typical joint inertia ≈ 1 kg·m².
-        # 10.0 → damping ratio ≈ 0.25 (slightly underdamped, no visible
-        # oscillation).  Friction-loss adds Coulomb stiction that kills
+        # Passive damping must be high enough to prevent ringing.
+        # With position-servo gain ~= 400, critical damping requires
+        # b ~= 2*sqrt(kp*I) ~= 40 for typical joint inertia ~= 1 kg*m^2.
+        # 10.0 -> damping ratio ~= 0.25 (slightly underdamped, no visible
+        # oscillation). Friction-loss adds Coulomb stiction that kills
         # residual jitter near equilibrium.
-        for dof in self.robot_dofs:
-            self.model.dof_damping[dof] = max(self.model.dof_damping[dof], 10.0)
-            self.model.dof_frictionloss[dof] = max(self.model.dof_frictionloss[dof], 0.5)
+        configure_position_actuators(
+            self.model,
+            actuator_handles,
+            min_damping=10.0,
+            min_frictionloss=0.5,
+        )
 
         # --- Self-collision detection ---
         self._collision_detector = CollisionDetector(self.model)
@@ -325,17 +330,6 @@ class URReachEnvBase:
             self.model, self.data, self.ee_site, self.robot_dofs,
             damping=self.ik_damping,
         )
-
-        # Ensure actuator control ranges match joint limits
-        for k, act in enumerate(self.robot_actuators):
-            jid = mujoco.mj_name2id(
-                self.model, mujoco.mjtObj.mjOBJ_JOINT, self.robot_joints[k]
-            )
-            rng = self.model.jnt_range[jid]
-            low, high = (-np.pi, np.pi) if rng[0] >= rng[1] else rng
-            self.model.actuator_ctrlrange[act] = [low, high]
-            if self.model.actuator_gainprm[act, 0] <= 0.0:
-                self.model.actuator_gainprm[act, 0] = 400.0
 
         # State
         self._last_targets = self.init_q.copy()
@@ -349,7 +343,42 @@ class URReachEnvBase:
         self._last_action = np.zeros(self.action_dim, dtype=np.float32)
         self._prev_action = np.zeros(self.action_dim, dtype=np.float32)
 
+        # Manager-based MDP composition (IsaacLab-style).
+        self._mdp_cfg = self._resolve_mdp_cfg(mdp_cfg)
+        self._action_manager = ActionManager(self, self._mdp_cfg.action_term)
+        self._observation_manager = ObservationManager(
+            self, self._mdp_cfg.observation_terms
+        )
+        self._reward_manager = RewardManager(self, self._mdp_cfg.reward_terms)
+        self._termination_manager = TerminationManager(
+            self,
+            self._mdp_cfg.success_term,
+            self._mdp_cfg.failure_term,
+            self._mdp_cfg.timeout_term,
+        )
+
     # -------------------------------------------------------------- Properties
+    def _build_default_mdp_cfg(self) -> ReachMDPCfg:
+        """Return default manager-based MDP config for this environment."""
+        return make_default_reach_mdp_cfg()
+
+    def _resolve_mdp_cfg(self, mdp_cfg: ReachMDPCfg | None) -> ReachMDPCfg:
+        cfg = mdp_cfg or self._build_default_mdp_cfg()
+        defaults = self._build_default_mdp_cfg()
+        if cfg.action_term is None:
+            cfg.action_term = defaults.action_term
+        if not cfg.observation_terms:
+            cfg.observation_terms = defaults.observation_terms
+        if not cfg.reward_terms:
+            cfg.reward_terms = defaults.reward_terms
+        if cfg.success_term is None:
+            cfg.success_term = defaults.success_term
+        if cfg.failure_term is None:
+            cfg.failure_term = defaults.failure_term
+        if cfg.timeout_term is None:
+            cfg.timeout_term = defaults.timeout_term
+        return cfg
+
     @property
     def action_dim(self) -> int:
         """Action dimensionality (overridable by subclasses)."""
@@ -362,6 +391,8 @@ class URReachEnvBase:
         Matches Isaac Lab reach env: joint_pos(6) + joint_vel(6) +
         pose_command(7) + last_action(action_dim).
         """
+        if hasattr(self, "_observation_manager"):
+            return int(self._observation_manager.dim)
         return 19 + self.action_dim
 
     # -------------------------------------------------------------- Reset
@@ -382,8 +413,14 @@ class URReachEnvBase:
 
         # Set robot to home pose (with optional Isaac Lab-style randomization)
         self._total_episodes += 1
-        for qi, j in enumerate(self.robot_joints):
-            jid = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, j)
+        for qi, (jid, qpos_adr, dof_adr, act_id) in enumerate(
+            zip(
+                self._robot_joint_ids,
+                self._robot_qpos_ids,
+                self.robot_dofs,
+                self.robot_actuators,
+            )
+        ):
             q_home = self.init_q[qi]
             if self.randomize_init:
                 scale = float(self._rng.uniform(*self.init_q_range))
@@ -391,17 +428,12 @@ class URReachEnvBase:
                 lo, hi = self.model.jnt_range[jid]
                 if lo < hi:
                     q_home = float(np.clip(q_home, lo, hi))
-            self.data.qpos[self.model.jnt_qposadr[jid]] = q_home
-            self.data.qvel[self.model.jnt_dofadr[jid]] = 0.0
-            act_id = mujoco.mj_name2id(
-                self.model, mujoco.mjtObj.mjOBJ_ACTUATOR, f"{j}_motor"
-            )
-            if act_id != -1:
-                self.data.ctrl[act_id] = q_home
+            self.data.qpos[qpos_adr] = q_home
+            self.data.qvel[dof_adr] = 0.0
+            self.data.ctrl[act_id] = q_home
         # Update last targets to match randomized start
-        for qi, j in enumerate(self.robot_joints):
-            jid = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, j)
-            self._last_targets[qi] = self.data.qpos[self.model.jnt_qposadr[jid]]
+        for qi, qpos_adr in enumerate(self._robot_qpos_ids):
+            self._last_targets[qi] = self.data.qpos[qpos_adr]
 
         mujoco.mj_forward(self.model, self.data)
 
@@ -551,8 +583,7 @@ class URReachEnvBase:
 
     def _clamp_to_limits(self, targets: np.ndarray) -> np.ndarray:
         out = targets.copy()
-        for k, j in enumerate(self.robot_joints):
-            jid = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, j)
+        for k, jid in enumerate(self._robot_joint_ids):
             lo, hi = self.model.jnt_range[jid]
             if lo < hi:
                 out[k] = float(np.clip(out[k], lo, hi))
@@ -573,44 +604,12 @@ class URReachEnvBase:
         return quat_error_magnitude(self._ee_quat(), self.goal_quat)
 
     def _observe(self) -> np.ndarray:
-        """Build Isaac-Lab-compatible observation vector.
-
-        Layout (25-D for 6-DOF action):
-            joint_pos_rel (6) + joint_vel_rel (6) + pose_command (7) + last_action (6)
-
-        ``pose_command`` is the goal pose expressed in the robot **base frame**
-        as ``[x, y, z, qw, qx, qy, qz]``, matching Isaac Lab's
-        ``generated_commands("ee_pose")`` observation term.
-        """
-        parts: List[np.ndarray] = []
-
-        # 1. Joint positions — relative to home pose  (6,)
-        for qi, j in enumerate(self.robot_joints):
-            jid = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, j)
-            qpos = self.data.qpos[self.model.jnt_qposadr[jid]]
-            parts.append(np.array([qpos - self.init_q[qi]]))
-
-        # 2. Joint velocities  (6,)
-        for j in self.robot_joints:
-            jid = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, j)
-            parts.append(np.array([self.data.qvel[self.model.jnt_dofadr[jid]]]))
-
-        # 3. Pose command in robot base frame  (7,)
-        #    Isaac Lab stores this as (x, y, z, qw, qx, qy, qz) relative to
-        #    the robot root.  For our fixed-base arm the base frame origin is
-        #    self._BASE_POS with identity orientation.
-        goal_pos_base = self.goal_pos - self._BASE_POS              # (3,)
-        parts.append(goal_pos_base)
-        parts.append(self.goal_quat.copy())                          # (4,) wxyz
-
-        # 4. Last action  (action_dim,)
-        parts.append(self._last_action.copy())
-
-        obs = np.concatenate(parts).astype(np.float32)
+        """Build observation vector from configured observation terms."""
+        obs = self._observation_manager.observe()
 
         # Observation noise on proprioceptive channels (first 12: joint_pos + joint_vel)
         # Matches Isaac Lab: Unoise(n_min=-0.01, n_max=0.01) on both terms.
-        if self.obs_noise > 0.0:
+        if self.obs_noise > 0.0 and obs.shape[0] >= 12:
             noise = self._rng.uniform(
                 -self.obs_noise, self.obs_noise, size=12
             ).astype(np.float32)
@@ -650,48 +649,39 @@ class URReachEnvBase:
         self._resample_goal()
         return True
 
-    def _compute_done_flags(self, dist: float, ori_err_mag: float) -> tuple[bool, bool, bool, bool, bool]:
-        """Compute Manager-style done flags: success/failure + timeout."""
-        success = dist < self.reach_threshold and ori_err_mag < self.ori_threshold
-        failure = self._self_collision_count > 0
-        terminated = (
-            (self.terminate_on_success and success)
-            or (self.terminate_on_collision and failure)
+    def _compute_done_flags(
+        self,
+        dist: float,
+        ori_err_mag: float,
+    ) -> tuple[bool, bool, bool, bool, bool]:
+        """Compute done flags via the configured termination manager."""
+        ctx = {"dist": float(dist), "ori_err": float(ori_err_mag)}
+        flags = self._termination_manager.compute(ctx)
+        return (
+            bool(flags["success"]),
+            bool(flags["failure"]),
+            bool(flags["terminated"]),
+            bool(flags["time_out"]),
+            bool(flags["done"]),
         )
-        time_up = self.time_limit > 0 and (self.step_id + 1) >= self.time_limit
-        done = terminated or time_up
-        return success, failure, terminated, time_up, done
 
     def _compute_reward(self) -> Tuple[float, bool, Dict]:
         """Dense reward (7 terms), with Isaac-style time-based goal resampling."""
         dist = self._ee_goal_dist()
         ori_err_mag = self._orientation_error_magnitude()
+        action_delta = self._last_action - self._prev_action
+        action_rate_l2 = float(np.dot(action_delta, action_delta))
+        joint_vel = self.data.qvel[self.robot_dofs]
+        joint_vel_l2 = float(np.dot(joint_vel, joint_vel))
+        ctx = {
+            "dist": dist,
+            "ori_err": ori_err_mag,
+            "action_rate_l2": action_rate_l2,
+            "joint_vel_l2": joint_vel_l2,
+        }
 
         goal_resampled = self._maybe_resample_goal()
-
-        # --- Reward terms ---
-        pos_reward_coarse = -0.2 * dist
-        pos_reward_fine = 0.16 * (1.0 - math.tanh(dist / 0.1))
-        ori_reward = -0.15 * ori_err_mag
-        ori_reward_fine = 0.1 * (1.0 - math.tanh(ori_err_mag / 0.2))
-        at_goal_bonus = 0.5 if (dist < self.reach_threshold and ori_err_mag < self.ori_threshold) else 0.0
-
-        reward = (pos_reward_coarse + pos_reward_fine
-                  + ori_reward + ori_reward_fine + at_goal_bonus)
-
-        cur_ar_w = self._curriculum_weight(
-            self.action_rate_weight, self._action_rate_target
-        )
-        action_delta = self._last_action - self._prev_action
-        reward -= cur_ar_w * float(np.dot(action_delta, action_delta))
-
-        cur_jv_w = self._curriculum_weight(
-            self.joint_vel_weight, self._joint_vel_target
-        )
-        jvel_sq = 0.0
-        for dof in self.robot_dofs:
-            jvel_sq += self.data.qvel[dof] ** 2
-        reward -= cur_jv_w * jvel_sq
+        reward, raw_reward_terms, _weighted_terms = self._reward_manager.compute(ctx)
 
         success, failure, terminated, time_up, done = self._compute_done_flags(dist, ori_err_mag)
 
@@ -712,6 +702,10 @@ class URReachEnvBase:
             "goal_pos": self.goal_pos.copy(),
             "goal_quat": self.goal_quat.copy(),
         }
+        if self._mdp_cfg.include_reward_terms_in_info:
+            reward_terms = dict(raw_reward_terms)
+            reward_terms["step_dt"] = float(self.model.opt.timestep * self.n_substeps)
+            info["reward_terms"] = reward_terms
         return float(reward), done, info
 
     # -------------------------------------------------------------- Action hook
@@ -760,8 +754,8 @@ class URReachEnvBase:
 
         prev_targets = self._last_targets.copy()
 
-        # Delegate to variant-specific action mapping
-        qpos_targets = self._apply_action(act)
+        # Delegate to configured action term via manager
+        qpos_targets = self._action_manager.compute_joint_targets(act)
         qpos_targets = self._clamp_to_limits(qpos_targets)
         self._last_targets = qpos_targets.copy()
 

@@ -71,3 +71,9 @@ gymnasium.register(
     # 3.0 s / (0.005 s * 4 substeps) = 150 control steps.
     max_episode_steps=150,
 )
+
+gymnasium.register(
+    id="MuJoCoRobot/Slot-Sorter-v0",
+    entry_point="mujoco_robot.envs.slot_sorter.slot_sorter_env:SlotSorterGymnasium",
+    max_episode_steps=400,
+)

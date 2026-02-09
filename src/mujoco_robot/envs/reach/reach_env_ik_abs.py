@@ -23,6 +23,7 @@ from mujoco_robot.envs.reach.reach_env_base import (
     ReachGymnasiumBase,
     URReachEnvBase,
 )
+from mujoco_robot.envs.reach.mdp import actions
 
 
 class ReachIKAbsEnv(URReachEnvBase):
@@ -40,13 +41,7 @@ class ReachIKAbsEnv(URReachEnvBase):
     _action_dim = 6
 
     def _apply_action(self, action: np.ndarray) -> np.ndarray:
-        target_pos, target_quat = self._desired_ee_absolute(action)
-
-        qvel_cmd = self._ik_cartesian(target_pos, target_quat)
-        qvel_cmd = np.clip(qvel_cmd, -self.max_joint_vel, self.max_joint_vel)
-
-        ik_gain = 0.35
-        return self._last_targets + qvel_cmd * ik_gain
+        return actions.ik_absolute_joint_targets(self, action)
 
 
 class ReachIKAbsGymnasium(ReachGymnasiumBase):

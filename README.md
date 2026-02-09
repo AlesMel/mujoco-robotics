@@ -307,6 +307,7 @@ Expected: **24 tests**, all passing.
 To add a new robot:
 1. Create an MJCF XML in `mujoco_robot/robots/`.
 2. Register it in `mujoco_robot/robots/configs.py` with a `RobotConfig` entry.
+3. Register/reuse an actuator profile in `mujoco_robot/robots/actuators.py`.
 
 ---
 
@@ -326,3 +327,27 @@ To add a new robot:
 ## 📝 License
 
 MIT
+
+## Task Layer (IsaacLab-style)
+
+- `mujoco_robot.tasks.reach` and `mujoco_robot.tasks.slot_sorter` provide per-task config dataclasses and factories.
+- `mujoco_robot.tasks.registry` provides `TASK_REGISTRY`, `get_task_spec`, and `make_task(...)`.
+- `mujoco_robot.envs` contains low-level simulation environments; `mujoco_robot.tasks` is the high-level task composition layer.
+- `mujoco_robot.envs.slot_sorter_env` remains a backward-compatible shim to the new `mujoco_robot.envs.slot_sorter` package.
+
+### Reach MDP Overrides
+
+```python
+from mujoco_robot.tasks.reach import ReachTaskConfig, make_reach_env
+from mujoco_robot.envs.reach.mdp import make_default_reach_mdp_cfg, RewardTermCfg
+
+def my_dense_bonus(_env, _ctx):
+    return 1.0
+
+mdp_cfg = make_default_reach_mdp_cfg()
+mdp_cfg.reward_terms = (RewardTermCfg("bonus", my_dense_bonus, weight=0.5),)
+
+cfg = ReachTaskConfig(robot="ur3e", control_variant="ik_rel", mdp_cfg=mdp_cfg)
+env = make_reach_env(cfg)
+obs = env.reset(seed=0)
+```

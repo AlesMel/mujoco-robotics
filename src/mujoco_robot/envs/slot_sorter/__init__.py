@@ -1,9 +1,5 @@
-"""Backward-compatible shim for slot-sorter task modules.
+"""Slot-sorter task package."""
 
-For new code, prefer:
-
-    from mujoco_robot.envs.slot_sorter import URSlotSorterEnv, SlotSorterGymnasium
-"""
 from mujoco_robot.envs.slot_sorter.slot_sorter_env import (
     StepResult,
     SlotSorterGymnasium,

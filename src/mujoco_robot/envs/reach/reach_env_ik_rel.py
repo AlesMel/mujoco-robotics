@@ -27,6 +27,7 @@ from mujoco_robot.envs.reach.reach_env_base import (
     ReachGymnasiumBase,
     URReachEnvBase,
 )
+from mujoco_robot.envs.reach.mdp import actions
 
 
 class ReachIKRelEnv(URReachEnvBase):
@@ -44,18 +45,7 @@ class ReachIKRelEnv(URReachEnvBase):
     _action_dim = 6
 
     def _apply_action(self, action: np.ndarray) -> np.ndarray:
-        delta_pos = action[:3] * self.ee_step
-        delta_ori = action[3:6] * self.ori_step
-        target_pos, target_quat = self._desired_ee_relative(delta_pos, delta_ori)
-
-        qvel_cmd = self._ik_cartesian(target_pos, target_quat)
-        qvel_cmd = np.clip(qvel_cmd, -self.max_joint_vel, self.max_joint_vel)
-
-        ik_gain = 0.35
-        # Support a true "no-op" around zero action
-        if np.linalg.norm(action) < self.hold_eps:
-            return self._last_targets.copy()
-        return self._last_targets + qvel_cmd * ik_gain
+        return actions.ik_relative_joint_targets(self, action)
 
 
 class ReachIKRelGymnasium(ReachGymnasiumBase):
