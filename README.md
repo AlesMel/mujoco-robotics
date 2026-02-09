@@ -18,36 +18,34 @@ wrappers for training and keyboard/gamepad teleop for interactive testing.
 
 ```
 mujoco-robot/
-├── src/mujoco_robot/               # Main Python package
-│   ├── __init__.py
-│   ├── robots/                     # Robot models & configuration
-│   │   ├── configs.py              # RobotConfig dataclass + registry
-│   │   ├── ur5e.xml                # UR5e MJCF (Menagerie OBJ meshes)
-│   │   ├── ur3e.xml                # UR3e MJCF (scaled UR5e meshes)
-│   │   └── assets/ur5e/            # 20 OBJ mesh files
-│   ├── core/                       # Reusable engine modules
-│   │   ├── ik_controller.py        # Damped-least-squares IK solver
-│   │   ├── collision.py            # Self-collision detector
-│   │   └── xml_builder.py          # MJCF XML injection utilities
-│   ├── envs/                       # Gymnasium-ready environments
-│   │   ├── reach_env.py            # URReachEnv + ReachGymnasium
-│   │   └── slot_sorter_env.py      # URSlotSorterEnv + SlotSorterGymnasium
-│   ├── training/                   # RL training utilities
-│   │   ├── callbacks.py            # BestEpisodeVideoCallback (SB3)
-│   │   ├── train_reach.py          # PPO training for reach task
-│   │   └── train_slot_sorter.py    # PPO training for slot sorter
-│   ├── teleop/                     # Interactive controllers
-│   │   ├── keyboard.py             # Keyboard teleop (both tasks)
-│   │   ├── gamepad.py              # DualShock/DualSense gamepad
-│   │   └── gui.py                  # Tkinter GUI with buttons & camera
-│   └── scripts/                    # CLI entry points
-│       ├── teleop.py               # Unified teleop launcher
-│       ├── train.py                # Unified training launcher
-│       └── visual_smoke.py         # Scripted rollout video
-├── docs/images/                    # README screenshots
-├── pyproject.toml                  # Package metadata & dependencies
-├── .gitignore
-└── README.md
+src/mujoco_robot/
+├── robots/
+│   ├── configs.py                  # Robot model config registry
+│   ├── actuators.py                # Reusable actuator profiles + runtime resolver
+│   └── *.xml, assets/
+├── core/
+│   ├── ik_controller.py
+│   ├── collision.py
+│   └── xml_builder.py
+├── envs/
+│   ├── reach/
+│   │   ├── reach_env_base.py
+│   │   ├── reach_env_ik_rel.py
+│   │   ├── reach_env_ik_abs.py
+│   │   ├── reach_env_joint_pos.py
+│   │   ├── reach_env_joint_pos_isaac_reward.py
+│   │   └── mdp/                    # Manager-style terms + configs
+│   ├── slot_sorter/
+│   │   └── slot_sorter_env.py
+│   ├── reach_env.py                # Backward-compatible reach shim
+│   └── slot_sorter_env.py          # Backward-compatible slot-sorter shim
+├── tasks/
+│   ├── reach/                      # Reach task cfg + factory
+│   ├── slot_sorter/                # Slot-sorter task cfg + factory
+│   └── registry.py                 # TASK_REGISTRY + make_task(...)
+├── training/
+├── teleop/
+└── scripts/
 ```
 
 ---
@@ -133,20 +131,24 @@ The GUI provides:
 ### 4. Train with PPO
 
 ```bash
-# Reach task (default: Cartesian IK actions)
-python scripts/train.py --task reach --robot ur5e --total-timesteps 500000
+# Reach task (UR3e, IK-relative)
+python -m mujoco_robot.scripts.train --task reach --robot ur3e --control-variant ik_rel --total-timesteps 500000
 
-# Reach task (joint-space actions, Isaac Lab style)
-python scripts/train.py --task reach --robot ur5e --action-mode joint --total-timesteps 500000
+# Reach task (other control variants)
+python -m mujoco_robot.scripts.train --task reach --robot ur3e --control-variant ik_abs --total-timesteps 500000
+python -m mujoco_robot.scripts.train --task reach --robot ur3e --control-variant joint_pos --total-timesteps 500000
+
+# Reach task (Isaac reward variant)
+python -m mujoco_robot.training.train_reach --robot ur3e --control-variant joint_pos_isaac_reward --total-timesteps 500000
 
 # Slot sorter
-python scripts/train.py --task slot_sorter --total-timesteps 1000000
+python -m mujoco_robot.scripts.train --task slot_sorter --total-timesteps 1000000
 
 # Monitor in TensorBoard
 tensorboard --logdir runs
 ```
 
-### 4. Use as a Python library
+### 5. Use as a Python library
 
 The environment is a **fully standard [Gymnasium](https://gymnasium.farama.org/) environment**
 and works with **any** Gymnasium-compatible RL library — Stable-Baselines3, CleanRL,
@@ -178,12 +180,11 @@ from mujoco_robot.envs import ReachGymnasium
 
 # All environment parameters are configurable via kwargs
 env = ReachGymnasium(
-    robot="ur5e",
+    robot="ur3e",
+    control_variant="ik_rel",   # ik_rel | ik_abs | joint_pos | joint_pos_isaac_reward
     render_mode="rgb_array",    # "rgb_array" for video, None for headless
-    action_mode="joint",        # "joint" (6-D) or "cartesian" (4-D IK)
     reach_threshold=0.05,       # 5 cm position tolerance
-    yaw_threshold=0.35,         # ~20° yaw tolerance
-    hold_seconds=2.0,           # hold at goal 2 s before resample
+    ori_threshold=0.35,         # orientation tolerance (rad)
 )
 obs, info = env.reset()
 obs, reward, terminated, truncated, info = env.step(env.action_space.sample())
@@ -216,9 +217,9 @@ algo.train()
 ```python
 from mujoco_robot.envs import URReachEnv
 
-env = URReachEnv(robot="ur3e", time_limit=0)
+env = URReachEnv(robot="ur3e", control_variant="ik_rel", time_limit=0)
 obs = env.reset()
-result = env.step([0.5, 0.0, 0.0, 0.0])  # returns StepResult dataclass
+result = env.step([0.5, 0.0, 0.0, 0.0, 0.0, 0.0])  # StepResult dataclass
 print(f"EE pos: {result.info['ee_pos']}, dist: {result.info['dist']:.3f}")
 ```
 
@@ -226,7 +227,12 @@ print(f"EE pos: {result.info['ee_pos']}, dist: {result.info['dist']:.3f}")
 
 | Gymnasium ID | Class | Action Dim | Obs Dim | Description |
 |--------------|-------|-----------|---------|-------------|
-| `MuJoCoRobot/Reach-v0` | `ReachGymnasium` | 6 (joint) / 4 (cartesian) | 31 / 29 | Reach + hold goal pose |
+| `MuJoCoRobot/Reach-v0` | `ReachGymnasium` | 6 | 25 | Reach (factory wrapper; default variant `ik_rel`) |
+| `MuJoCoRobot/Reach-IK-Rel-v0` | `ReachIKRelGymnasium` | 6 | 25 | IK-relative reach |
+| `MuJoCoRobot/Reach-IK-Abs-v0` | `ReachIKAbsGymnasium` | 6 | 25 | IK-absolute reach |
+| `MuJoCoRobot/Reach-Joint-Pos-v0` | `ReachJointPosGymnasium` | 6 | 25 | Relative joint-position reach |
+| `MuJoCoRobot/Reach-Joint-Pos-Isaac-Reward-v0` | `ReachJointPosIsaacRewardGymnasium` | 6 | 25 | Joint-position reach + Isaac reward terms |
+| `MuJoCoRobot/Slot-Sorter-v0` | `SlotSorterGymnasium` | 5 | 92 | Pick-and-place slot sorting |
 
 ---
 
@@ -234,11 +240,11 @@ print(f"EE pos: {result.info['ee_pos']}, dist: {result.info['dist']:.3f}")
 
 ### Reach Task
 
-Move the end-effector to a random 3-D goal **position and yaw orientation**
-(red cube with RGB coordinate axes).  Goals spawn **in front** of the robot
-in the reachable workspace.  When the EE reaches the goal and **holds** there
-for 2 seconds, a new goal is sampled — the episode only ends on time-out
-(no early termination on success).
+Move the end-effector to a random 3-D goal **position and full orientation**.
+The reach task provides multiple control variants (`ik_rel`, `ik_abs`,
+`joint_pos`, `joint_pos_isaac_reward`) and now uses a manager-style MDP
+configuration so action/observation/reward/termination terms can be overridden
+without editing the environment core.
 
 | UR5e | UR3e |
 |------|------|
@@ -268,19 +274,24 @@ Each robot MJCF uses a **dual-geom architecture** for robust collision handling:
 
 | Environment | Action Dim | Obs Dim | Description |
 |-------------|-----------|---------|-------------|
-| `URReachEnv` (cartesian) | 4 | 29 | Move EE to random 3-D pose (pos + yaw) via IK |
-| `URReachEnv` (joint) | 6 | 31 | Move EE to random 3-D pose via joint offsets |
-| `URSlotSorterEnv` | 5 | 71 | Pick colored objects → matching slots |
+| `URReachEnv` (`ik_rel`) | 6 | 25 | Relative Cartesian IK control |
+| `URReachEnv` (`ik_abs`) | 6 | 25 | Absolute Cartesian IK control |
+| `URReachEnv` (`joint_pos`) | 6 | 25 | Relative joint-position control |
+| `URReachEnv` (`joint_pos_isaac_reward`) | 6 | 25 | Joint-position control + Isaac-style reward terms |
+| `URSlotSorterEnv` | 5 | 92 | Pick colored objects → matching slots |
 
 Both environments use:
-- **Position servo actuators** (kp=200) for stable joint control.
+- **Position servo actuators** configured through reusable actuator profiles.
 - **Damped-least-squares IK** for Cartesian end-effector commands.
-- **Dense reward shaping** to help RL exploration.
+- **Task-specific reward shaping** suitable for RL exploration.
 
 ### Core Modules
 
 | Module | Purpose |
 |--------|---------|
+| `tasks/*` | High-level task configs/factories and task registry |
+| `envs/reach/mdp/*` | Manager-style reach MDP terms (actions/obs/rewards/terminations) |
+| `robots/actuators.py` | Shared actuator configs and runtime model binding |
 | `IKController` | Cartesian → joint velocity via Jacobian pseudo-inverse |
 | `CollisionDetector` | Counts non-adjacent robot link contacts |
 | `xml_builder` | Programmatic MJCF injection (goals, cameras, etc.) |
@@ -292,8 +303,6 @@ Both environments use:
 ```bash
 pytest tests/ -v
 ```
-
-Expected: **24 tests**, all passing.
 
 ---
 
@@ -331,9 +340,9 @@ MIT
 ## Task Layer (IsaacLab-style)
 
 - `mujoco_robot.tasks.reach` and `mujoco_robot.tasks.slot_sorter` provide per-task config dataclasses and factories.
-- `mujoco_robot.tasks.registry` provides `TASK_REGISTRY`, `get_task_spec`, and `make_task(...)`.
+- `mujoco_robot.tasks.registry` provides `TASK_REGISTRY`, `get_task_spec`, `list_tasks`, and `make_task(...)`.
 - `mujoco_robot.envs` contains low-level simulation environments; `mujoco_robot.tasks` is the high-level task composition layer.
-- `mujoco_robot.envs.slot_sorter_env` remains a backward-compatible shim to the new `mujoco_robot.envs.slot_sorter` package.
+- `mujoco_robot.envs.slot_sorter_env` remains a backward-compatible shim to `mujoco_robot.envs.slot_sorter`.
 
 ### Reach MDP Overrides
 
