@@ -25,7 +25,7 @@ from mujoco_robot.envs.reach.reach_env_base import (
     ReachGymnasiumBase,
     URReachEnvBase,
 )
-from mujoco_robot.envs.reach.mdp import actions
+from mujoco_robot.tasks.manager_based.manipulation.reach.mdp import actions
 
 
 class ReachJointPosEnv(URReachEnvBase):

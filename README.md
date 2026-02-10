@@ -33,14 +33,13 @@ src/mujoco_robot/
 │   │   ├── reach_env_ik_rel.py
 │   │   ├── reach_env_ik_abs.py
 │   │   ├── reach_env_joint_pos.py
-│   │   ├── reach_env_joint_pos_isaac_reward.py
-│   │   └── mdp/                    # Manager-style terms + configs
+│   │   └── reach_env_joint_pos_isaac_reward.py
 │   ├── slot_sorter/
 │   │   └── slot_sorter_env.py
-│   ├── reach_env.py                # Backward-compatible reach shim
 │   └── slot_sorter_env.py          # Backward-compatible slot-sorter shim
 ├── tasks/
-│   ├── reach/                      # Reach task cfg + factory
+│   ├── manager_based/
+│   │   └── manipulation/reach/     # Reach cfgs + manager-based runtime + MDP terms
 │   ├── slot_sorter/                # Slot-sorter task cfg + factory
 │   └── registry.py                 # TASK_REGISTRY + make_task(...)
 ├── training/
@@ -141,12 +140,33 @@ python -m mujoco_robot.scripts.train --task reach --robot ur3e --control-variant
 # Reach task (Isaac reward variant)
 python -m mujoco_robot.training.train_reach --robot ur3e --control-variant joint_pos_isaac_reward --total-timesteps 500000
 
+# Reach task with SKRL PPO (simple wrapper)
+python scripts/train_skrl_reach.py --robot ur3e --total-timesteps 24000
+
 # Slot sorter
 python -m mujoco_robot.scripts.train --task slot_sorter --total-timesteps 1000000
 
 # Monitor in TensorBoard
 tensorboard --logdir runs
 ```
+
+### 4b. Interactive policy evaluation (SB3)
+
+```bash
+python scripts/eval_reach.py --model ppo_reach_ur3e_ur3e_joint_pos_dense_stable.zip
+# or (after pip install -e .):
+mr-eval-reach --model ppo_reach_ur3e_ur3e_joint_pos_dense_stable.zip
+```
+
+Default evaluator behavior:
+- no timeout (`--time-limit 0`)
+- manual reset with `R`
+
+Controls in the viewer:
+- `G` new goal
+- `R` reset episode
+- `P` pause/resume
+- `Q` / `ESC` quit
 
 ### 5. Use as a Python library
 
@@ -176,12 +196,11 @@ env.close()
 #### Direct instantiation
 
 ```python
-from mujoco_robot.envs import ReachGymnasium
+from mujoco_robot.envs.reach import ReachIKRelGymnasium
 
 # All environment parameters are configurable via kwargs
-env = ReachGymnasium(
+env = ReachIKRelGymnasium(
     robot="ur3e",
-    control_variant="ik_rel",   # ik_rel | ik_abs | joint_pos | joint_pos_isaac_reward
     render_mode="rgb_array",    # "rgb_array" for video, None for headless
     reach_threshold=0.05,       # 5 cm position tolerance
     ori_threshold=0.35,         # orientation tolerance (rad)
@@ -215,9 +234,9 @@ algo.train()
 #### Low-level API (for custom loops / teleop)
 
 ```python
-from mujoco_robot.envs import URReachEnv
+from mujoco_robot.envs.reach import ReachIKRelEnv
 
-env = URReachEnv(robot="ur3e", control_variant="ik_rel", time_limit=0)
+env = ReachIKRelEnv(robot="ur3e", time_limit=0)
 obs = env.reset()
 result = env.step([0.5, 0.0, 0.0, 0.0, 0.0, 0.0])  # StepResult dataclass
 print(f"EE pos: {result.info['ee_pos']}, dist: {result.info['dist']:.3f}")
@@ -227,7 +246,7 @@ print(f"EE pos: {result.info['ee_pos']}, dist: {result.info['dist']:.3f}")
 
 | Gymnasium ID | Class | Action Dim | Obs Dim | Description |
 |--------------|-------|-----------|---------|-------------|
-| `MuJoCoRobot/Reach-v0` | `ReachGymnasium` | 6 | 25 | Reach (factory wrapper; default variant `ik_rel`) |
+| `MuJoCoRobot/Reach-v0` | `ReachJointPosGymnasium` | 6 | 25 | Reach (default joint-position variant) |
 | `MuJoCoRobot/Reach-IK-Rel-v0` | `ReachIKRelGymnasium` | 6 | 25 | IK-relative reach |
 | `MuJoCoRobot/Reach-IK-Abs-v0` | `ReachIKAbsGymnasium` | 6 | 25 | IK-absolute reach |
 | `MuJoCoRobot/Reach-Joint-Pos-v0` | `ReachJointPosGymnasium` | 6 | 25 | Relative joint-position reach |
@@ -275,10 +294,10 @@ Each robot MJCF uses a **dual-geom architecture** for robust collision handling:
 
 | Environment | Action Dim | Obs Dim | Description |
 |-------------|-----------|---------|-------------|
-| `URReachEnv` (`ik_rel`) | 6 | 25 | Relative Cartesian IK control |
-| `URReachEnv` (`ik_abs`) | 6 | 25 | Absolute Cartesian IK control |
-| `URReachEnv` (`joint_pos`) | 6 | 25 | Relative joint-position control |
-| `URReachEnv` (`joint_pos_isaac_reward`) | 6 | 25 | Joint-position control + Isaac-style reward terms |
+| `ReachIKRelEnv` | 6 | 25 | Relative Cartesian IK control |
+| `ReachIKAbsEnv` | 6 | 25 | Absolute Cartesian IK control |
+| `ReachJointPosEnv` | 6 | 25 | Relative joint-position control |
+| `ReachJointPosIsaacRewardEnv` | 6 | 25 | Joint-position control + Isaac-style reward terms |
 | `URSlotSorterEnv` | 5 | 92 | Pick colored objects → matching slots |
 
 Both environments use:
@@ -291,7 +310,7 @@ Both environments use:
 | Module | Purpose |
 |--------|---------|
 | `tasks/*` | High-level task configs/factories and task registry |
-| `envs/reach/mdp/*` | Manager-style reach MDP terms (actions/obs/rewards/terminations) |
+| `tasks/manager_based/manipulation/reach/mdp/*` | Manager-style reach MDP terms (actions/obs/rewards/terminations) |
 | `robots/actuators.py` | Shared actuator configs and runtime model binding |
 | `IKController` | Cartesian → joint velocity via Jacobian pseudo-inverse |
 | `CollisionDetector` | Counts non-adjacent robot link contacts |
@@ -340,7 +359,8 @@ MIT
 
 ## Task Layer (IsaacLab-style)
 
-- `mujoco_robot.tasks.reach` and `mujoco_robot.tasks.slot_sorter` provide per-task config dataclasses and factories.
+- `mujoco_robot.tasks.manager_based.manipulation.reach` provides reach cfg profiles and manager-based factories.
+- `mujoco_robot.tasks.slot_sorter` provides slot-sorter config dataclasses and factories.
 - `mujoco_robot.tasks.registry` provides `TASK_REGISTRY`, `get_task_spec`, `list_tasks`, and `make_task(...)`.
 - `mujoco_robot.envs` contains low-level simulation environments; `mujoco_robot.tasks` is the high-level task composition layer.
 - `mujoco_robot.envs.slot_sorter_env` remains a backward-compatible shim to `mujoco_robot.envs.slot_sorter`.
@@ -348,8 +368,11 @@ MIT
 ### Reach MDP Overrides
 
 ```python
-from mujoco_robot.tasks.reach import ReachTaskConfig, make_reach_env
-from mujoco_robot.envs.reach.mdp import make_default_reach_mdp_cfg, RewardTermCfg
+from mujoco_robot.tasks import ReachEnvCfg, make_reach_manager_based_env
+from mujoco_robot.tasks.manager_based.manipulation.reach.mdp import (
+    make_default_reach_mdp_cfg,
+    RewardTermCfg,
+)
 
 def my_dense_bonus(_env, _ctx):
     return 1.0
@@ -357,7 +380,10 @@ def my_dense_bonus(_env, _ctx):
 mdp_cfg = make_default_reach_mdp_cfg()
 mdp_cfg.reward_terms = (RewardTermCfg("bonus", my_dense_bonus, weight=0.5),)
 
-cfg = ReachTaskConfig(robot="ur3e", control_variant="ik_rel", mdp_cfg=mdp_cfg)
-env = make_reach_env(cfg)
+cfg = ReachEnvCfg()
+cfg.scene.robot = "ur3e"
+cfg.actions.control_variant = "ik_rel"
+cfg.managers.mdp_cfg = mdp_cfg
+env = make_reach_manager_based_env(cfg)
 obs = env.reset(seed=0)
 ```

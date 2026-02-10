@@ -1,8 +1,9 @@
-"""Train PPO on the URReachEnv.
+"""Train PPO on the manager-based reach task.
 
 Usage::
 
     python -m mujoco_robot.training.train_reach --robot ur5e --total-timesteps 500000
+    python -m mujoco_robot.training.train_reach --cfg-name ur5e_joint_pos
 
 Or from Python::
 
@@ -15,11 +16,19 @@ import argparse
 
 from stable_baselines3 import PPO
 from stable_baselines3.common.monitor import Monitor
-from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecNormalize
+from stable_baselines3.common.vec_env import SubprocVecEnv, VecNormalize
 
 from mujoco_robot.envs.reach import REACH_VARIANTS
-from mujoco_robot.envs.reach_env import ReachGymnasium
+from mujoco_robot.tasks.manager_based.manipulation.reach import (
+    get_reach_cfg,
+    make_reach_manager_based_gymnasium,
+)
 from mujoco_robot.training.callbacks import BestEpisodeVideoCallback
+from mujoco_robot.training.reach_cli import (
+    DEFAULT_CFG_NAME,
+    add_reach_train_args,
+    reach_train_kwargs_from_args,
+)
 
 
 def train_reach_ppo(
@@ -31,7 +40,6 @@ def train_reach_ppo(
     save_video: bool = True,
     save_video_every: int = 50_000,
     control_variant: str = "joint_pos",
-    action_mode: str | None = None,
     reach_threshold: float = 0.03,
     ori_threshold: float = 0.25,
     success_hold_steps: int = 10,
@@ -41,74 +49,28 @@ def train_reach_ppo(
     progress_bar: bool = True,
     sb3_verbose: int = 0,
     callback_new_best_only: bool = True,
+    cfg_name: str = DEFAULT_CFG_NAME,
 ):
-    """Quick-start PPO training on the reach task.
+    """Quick-start PPO training on the manager-based reach task."""
+    profile_name = cfg_name
 
-    Parameters
-    ----------
-    robot : str
-        Robot model (``"ur5e"`` or ``"ur3e"``).
-    total_timesteps : int
-        Total environment steps.
-    n_envs : int
-        Number of parallel environments.
-    log_dir : str
-        TensorBoard log directory.
-    log_name : str
-        TensorBoard run name.
-    save_video : bool
-        Whether to record periodic eval videos.
-    save_video_every : int
-        Training timesteps between video recordings.
-    control_variant : str
-        Reach control variant key from :data:`mujoco_robot.envs.reach.REACH_VARIANTS`.
-    action_mode : str | None
-        Backward-compatible alias. ``"cartesian"`` maps to ``"ik_rel"``,
-        ``"joint"`` maps to ``"joint_pos"``.
-    reach_threshold : float
-        Position distance (m) within which the EE counts as "at goal".
-    ori_threshold : float
-        Orientation error (rad) within which orientation counts as matched.
-    success_hold_steps : int
-        Consecutive success steps required for hold-success shaping.
-    success_bonus : float
-        One-time bonus added when hold-success is first achieved.
-    stay_reward_weight : float
-        Per-second reward weight while hold-success is maintained.
-    resample_on_success : bool
-        Whether to resample goal immediately after first hold-success.
-
-    Returns
-    -------
-    PPO
-        Trained model.
-    """
-    if action_mode is not None:
-        alias = {"cartesian": "ik_rel", "joint": "joint_pos"}
-        if action_mode not in alias:
-            raise ValueError(
-                f"action_mode must be one of {tuple(alias)}, got '{action_mode}'"
-            )
-        mapped_variant = alias[action_mode]
-        if control_variant != "joint_pos" and control_variant != mapped_variant:
-            raise ValueError(
-                "Conflicting inputs: action_mode implies "
-                f"'{mapped_variant}' but control_variant is '{control_variant}'."
-            )
-        control_variant = mapped_variant
-
-    env_kwargs = dict(
-        control_variant=control_variant,
-        reach_threshold=reach_threshold,
-        ori_threshold=ori_threshold,
-        success_hold_steps=success_hold_steps,
-        success_bonus=success_bonus,
-        stay_reward_weight=stay_reward_weight,
-        resample_on_success=resample_on_success,
-    )
+    def build_cfg(seed: int | None, render_mode: str | None):
+        cfg = get_reach_cfg(profile_name)
+        cfg.scene.robot = robot
+        cfg.scene.render_mode = render_mode
+        cfg.episode.seed = seed
+        cfg.actions.control_variant = control_variant
+        cfg.success.reach_threshold = reach_threshold
+        cfg.success.ori_threshold = ori_threshold
+        cfg.success.success_hold_steps = success_hold_steps
+        cfg.success.success_bonus = success_bonus
+        cfg.success.stay_reward_weight = stay_reward_weight
+        cfg.success.resample_on_success = resample_on_success
+        return cfg
 
     print(f"\n{'='*50}")
-    print(f"  Reach training config")
+    print("  Reach training config")
+    print(f"  Config profile:   {profile_name}")
     print(f"  Robot:            {robot}")
     print(f"  Control variant:  {control_variant}")
     print(f"  Reach threshold:  {reach_threshold:.3f} m")
@@ -125,23 +87,21 @@ def train_reach_ppo(
 
     def make_env(rank):
         def _init():
-            return Monitor(ReachGymnasium(
-                robot=robot, seed=rank,
-                **env_kwargs,
-            ))
+            cfg = build_cfg(seed=rank, render_mode=None)
+            return Monitor(make_reach_manager_based_gymnasium(cfg))
+
         return _init
 
     vec_env = SubprocVecEnv([make_env(i) for i in range(n_envs)])
     vec_env = VecNormalize(vec_env, norm_obs=True, norm_reward=True, clip_obs=10.0)
 
-    env_name = f"reach_{robot}"
+    env_name = f"reach_{robot}_{cfg_name}".replace("/", "_")
     callbacks = []
     if save_video:
+
         def make_eval_env():
-            return Monitor(ReachGymnasium(
-                robot=robot, render_mode="rgb_array",
-                **env_kwargs,
-            ))
+            cfg = build_cfg(seed=0, render_mode="rgb_array")
+            return Monitor(make_reach_manager_based_gymnasium(cfg))
 
         video_cb = BestEpisodeVideoCallback(
             make_eval_env=make_eval_env,
@@ -155,12 +115,6 @@ def train_reach_ppo(
         )
         callbacks.append(video_cb)
 
-    # PPO config aligned with Isaac Lab reach task:
-    #   - [128, 128] network (larger net needed for full orientation
-    #     control — 43-D obs with 6-D continuous rotations)
-    #   - batch_size = n_steps * n_envs / 4  (4 minibatches)
-    #   - LR 3e-4 (slightly lower than before for stable orientation learning)
-    #   - entropy 0.01 encourages exploration early on
     n_steps = 2048
     n_minibatches = 4
     batch_size = (n_steps * n_envs) // n_minibatches
@@ -189,73 +143,24 @@ def train_reach_ppo(
         tb_log_name=log_name,
         progress_bar=progress_bar,
     )
-    model.save(f"ppo_reach_{robot}")
-    vec_env.save(f"ppo_reach_{robot}_vecnorm.pkl")
-    print(f"Model saved to ppo_reach_{robot}.zip")
+    model_path = f"ppo_{env_name}"
+    model.save(model_path)
+    vec_norm_path = f"{model_path}_vecnorm.pkl"
+    vec_env.save(vec_norm_path)
+    print(f"Model saved to {model_path}.zip")
     return model
 
 
 def main():
-    from mujoco_robot.robots.configs import ROBOT_CONFIGS
-
-    p = argparse.ArgumentParser(description="Train PPO on URReachEnv.")
-    p.add_argument("--robot", type=str, default="ur3e",
-                    choices=list(ROBOT_CONFIGS.keys()))
-    p.add_argument("--total-timesteps", type=int, default=500_000)
-    p.add_argument("--n-envs", type=int, default=16)
-    p.add_argument("--control-variant", type=str, default="joint_pos",
-                    choices=sorted(REACH_VARIANTS.keys()),
-                    help=(
-                        "Control variant. Available: "
-                        + ", ".join(sorted(REACH_VARIANTS.keys()))
-                    ))
-    p.add_argument("--action-mode", type=str, default=None,
-                    choices=["cartesian", "joint"],
-                    help="Deprecated alias. cartesian->ik_rel, joint->joint_pos.")
-    p.add_argument("--reach-threshold", type=float, default=0.03,
-                    help="Position tolerance for goal reached (metres, default: 0.03)")
-    p.add_argument("--ori-threshold", type=float, default=0.25,
-                    help="Orientation tolerance for goal reached (radians, default: 0.25)")
-    p.add_argument("--success-hold-steps", type=int, default=10,
-                    help="Consecutive success steps required to trigger hold-success.")
-    p.add_argument("--success-bonus", type=float, default=0.25,
-                    help="One-time reward added when hold-success is first achieved.")
-    p.add_argument("--stay-reward-weight", type=float, default=0.05,
-                    help="Per-second reward weight while hold-success is maintained.")
-    p.add_argument("--resample-on-success", action=argparse.BooleanOptionalAction, default=False,
-                    help="Resample goal immediately after first hold-success for current goal.")
-    p.add_argument("--save-video", action=argparse.BooleanOptionalAction, default=True)
-    p.add_argument("--save-video-every", type=int, default=50_000)
-    p.add_argument("--progress-bar", action=argparse.BooleanOptionalAction, default=True,
-                    help="Use Stable-Baselines3 tqdm/rich progress bar.")
-    p.add_argument("--sb3-verbose", type=int, default=0, choices=[0, 1, 2],
-                    help="Stable-Baselines3 verbosity (0 recommended with progress bar).")
-    p.add_argument(
-        "--callback-new-best-only",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="If true, callback prints only when eval return reaches a new best.",
+    p = argparse.ArgumentParser(description="Train PPO on manager-based reach.")
+    add_reach_train_args(
+        p,
+        default_total_timesteps=500_000,
+        default_n_envs=16,
+        control_variant_choices=sorted(REACH_VARIANTS.keys()),
     )
     args = p.parse_args()
-
-    train_reach_ppo(
-        robot=args.robot,
-        total_timesteps=args.total_timesteps,
-        n_envs=args.n_envs,
-        save_video=args.save_video,
-        save_video_every=args.save_video_every,
-        control_variant=args.control_variant,
-        action_mode=args.action_mode,
-        reach_threshold=args.reach_threshold,
-        ori_threshold=args.ori_threshold,
-        success_hold_steps=args.success_hold_steps,
-        success_bonus=args.success_bonus,
-        stay_reward_weight=args.stay_reward_weight,
-        resample_on_success=args.resample_on_success,
-        progress_bar=args.progress_bar,
-        sb3_verbose=args.sb3_verbose,
-        callback_new_best_only=args.callback_new_best_only,
-    )
+    train_reach_ppo(**reach_train_kwargs_from_args(args))
 
 
 if __name__ == "__main__":

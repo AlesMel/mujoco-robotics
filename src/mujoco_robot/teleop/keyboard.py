@@ -2,11 +2,12 @@
 
 Usage::
 
-    from mujoco_robot.envs import URReachEnv, URSlotSorterEnv
+    from mujoco_robot.envs.reach import ReachJointPosEnv
+    from mujoco_robot.envs.slot_sorter import URSlotSorterEnv
     from mujoco_robot.teleop import ReachTeleop, SlotSorterTeleop
 
     # Reach task
-    env = URReachEnv(robot="ur5e", time_limit=0)
+    env = ReachJointPosEnv(robot="ur5e", time_limit=0)
     ReachTeleop(env).run()
 
     # Slot sorter task

@@ -1,6 +1,6 @@
 """Manager-based MDP API for reach tasks."""
 
-from mujoco_robot.envs.reach.mdp.terms import (
+from .terms import (
     ActionTermCfg,
     CommandTermCfg,
     ObservationTermCfg,
@@ -8,14 +8,14 @@ from mujoco_robot.envs.reach.mdp.terms import (
     RewardTermCfg,
     TerminationTermCfg,
 )
-from mujoco_robot.envs.reach.mdp.managers import (
+from .managers import (
     ActionManager,
     CommandManager,
     ObservationManager,
     RewardManager,
     TerminationManager,
 )
-from mujoco_robot.envs.reach.mdp.config import (
+from .config import (
     ReachRewardCfg,
     default_command_term,
     default_observation_terms,
@@ -53,3 +53,4 @@ __all__ = [
     "rewards",
     "terminations",
 ]
+

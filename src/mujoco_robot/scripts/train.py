@@ -32,11 +32,11 @@ def main():
         help="Reach control variant (default: joint_pos).",
     )
     p.add_argument(
-        "--reach-threshold", type=float, default=0.03,
+        "--reach-threshold", type=float, default=0.005,
         help="Reach success position threshold in metres (default: 0.03).",
     )
     p.add_argument(
-        "--ori-threshold", type=float, default=0.25,
+        "--ori-threshold", type=float, default=0.05,
         help="Reach success orientation threshold in radians (default: 0.25).",
     )
     p.add_argument(

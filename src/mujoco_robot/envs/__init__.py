@@ -7,9 +7,6 @@ Reach variants (Isaac Lab style — each action space is a separate class):
 * :class:`ReachJointPosEnv` / :class:`ReachJointPosGymnasium` — Joint-Position
 * :class:`ReachJointPosIsaacRewardEnv` / :class:`ReachJointPosIsaacRewardGymnasium`
   — Joint-Position with Isaac reward terms
-
-Backward-compatible aliases :class:`URReachEnv` (factory) and
-:class:`ReachGymnasium` remain available for transition.
 """
 
 # --- Modular reach variants (preferred) ---
@@ -26,12 +23,6 @@ from mujoco_robot.envs.reach import (
     ReachJointPosIsaacRewardEnv,
     ReachJointPosIsaacRewardGymnasium,
     REACH_VARIANTS,
-)
-
-# --- Backward-compatible shims ---
-from mujoco_robot.envs.reach_env import (
-    URReachEnv,
-    ReachGymnasium,
 )
 
 # --- Slot sorter ---
@@ -52,9 +43,6 @@ __all__ = [
     "ReachJointPosIsaacRewardEnv",
     "ReachJointPosIsaacRewardGymnasium",
     "REACH_VARIANTS",
-    # Backward compat
-    "URReachEnv",
-    "ReachGymnasium",
     # Slot sorter
     "URSlotSorterEnv",
     "SlotSorterGymnasium",

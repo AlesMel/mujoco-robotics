@@ -20,7 +20,7 @@ from mujoco_robot.core.ik_controller import (
     orientation_error_axis_angle,
     quat_error_magnitude,
 )
-from mujoco_robot.envs.reach_env import URReachEnv
+from mujoco_robot.envs.reach import ReachIKRelEnv
 
 
 # ────────────────────────────────────────────────────────────────────────
@@ -28,7 +28,7 @@ from mujoco_robot.envs.reach_env import URReachEnv
 # ────────────────────────────────────────────────────────────────────────
 
 def _drive_to_target(
-    env: URReachEnv,
+    env: ReachIKRelEnv,
     target_pos: np.ndarray,
     target_quat: np.ndarray,
     drive_steps: int = 200,
@@ -90,11 +90,10 @@ def _drive_to_target(
 
 @pytest.fixture(params=["ur5e", "ur3e"])
 def reach_env(request):
-    """Create a URReachEnv for each robot, action_mode=cartesian."""
-    env = URReachEnv(
+    """Create an IK-relative reach env for each robot."""
+    env = ReachIKRelEnv(
         robot=request.param,
         time_limit=0,  # no time limit for testing
-        action_mode="cartesian",
         randomize_init=False,
         seed=42,
     )
@@ -105,7 +104,7 @@ def reach_env(request):
 
 @pytest.fixture
 def ur5e_env():
-    env = URReachEnv(robot="ur5e", time_limit=0, action_mode="cartesian", randomize_init=False, seed=42)
+    env = ReachIKRelEnv(robot="ur5e", time_limit=0, randomize_init=False, seed=42)
     env.reset(seed=42)
     yield env
     env.close()
@@ -113,7 +112,7 @@ def ur5e_env():
 
 @pytest.fixture
 def ur3e_env():
-    env = URReachEnv(robot="ur3e", time_limit=0, action_mode="cartesian", randomize_init=False, seed=42)
+    env = ReachIKRelEnv(robot="ur3e", time_limit=0, randomize_init=False, seed=42)
     env.reset(seed=42)
     yield env
     env.close()
@@ -232,7 +231,7 @@ class TestIKSequentialTargets:
     @pytest.mark.parametrize("robot", ["ur5e", "ur3e"])
     def test_sequential_hold(self, robot):
         """Drive to 3 waypoints in sequence — each must hold."""
-        env = URReachEnv(robot=robot, time_limit=0, action_mode="cartesian", randomize_init=False, seed=7)
+        env = ReachIKRelEnv(robot=robot, time_limit=0, randomize_init=False, seed=7)
 
         # Quaternions are near-identity with slight Z-rotation
         if robot == "ur5e":  # home EE ≈ [0.20, 0.13, 1.21]
@@ -321,7 +320,7 @@ class TestIKNoCollision:
     @pytest.mark.parametrize("robot", ["ur5e", "ur3e"])
     def test_no_collision_at_home(self, robot):
         """Holding at home should produce zero self-collisions."""
-        env = URReachEnv(robot=robot, time_limit=0, action_mode="cartesian", randomize_init=False, seed=42)
+        env = ReachIKRelEnv(robot=robot, time_limit=0, randomize_init=False, seed=42)
         env.reset(seed=42)
 
         total_collisions = 0
@@ -337,7 +336,7 @@ class TestIKNoCollision:
     @pytest.mark.parametrize("robot", ["ur5e", "ur3e"])
     def test_no_collision_during_reach(self, robot):
         """Moving to a safe target should not trigger self-collisions."""
-        env = URReachEnv(robot=robot, time_limit=0, action_mode="cartesian", randomize_init=False, seed=42)
+        env = ReachIKRelEnv(robot=robot, time_limit=0, randomize_init=False, seed=42)
         env.reset(seed=42)
 
         # Safe target — in front of base, well within reach

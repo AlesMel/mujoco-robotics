@@ -1,9 +1,10 @@
 """IsaacLab-style task layer: configs, factories, registry."""
 
-from mujoco_robot.tasks.reach import (
-    ReachTaskConfig,
-    make_reach_env,
-    make_reach_gymnasium,
+from mujoco_robot.tasks.manager_based.manipulation.reach import (
+    ReachEnvCfg,
+    make_reach_manager_based_env,
+    make_reach_manager_based_gymnasium,
+    list_reach_cfgs,
 )
 from mujoco_robot.tasks.slot_sorter import (
     SlotSorterTaskConfig,
@@ -18,10 +19,24 @@ from mujoco_robot.tasks.registry import (
     make_task,
 )
 
+
+def make_reach_env(cfg: ReachEnvCfg | None = None):
+    """Create a raw reach environment from manager-based config."""
+    return make_reach_manager_based_env(cfg)
+
+
+def make_reach_gymnasium(cfg: ReachEnvCfg | None = None):
+    """Create a Gymnasium reach environment from manager-based config."""
+    return make_reach_manager_based_gymnasium(cfg)
+
+
 __all__ = [
-    "ReachTaskConfig",
+    "ReachEnvCfg",
     "make_reach_env",
     "make_reach_gymnasium",
+    "make_reach_manager_based_env",
+    "make_reach_manager_based_gymnasium",
+    "list_reach_cfgs",
     "SlotSorterTaskConfig",
     "make_slot_sorter_env",
     "make_slot_sorter_gymnasium",

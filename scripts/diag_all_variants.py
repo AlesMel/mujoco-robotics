@@ -15,7 +15,7 @@ Observation layout (Isaac Lab aligned, 25-D for 6-DOF):
 from __future__ import annotations
 import sys, traceback
 import numpy as np
-from mujoco_robot.envs.reach_env import URReachEnv
+from mujoco_robot.envs.reach import ReachIKAbsEnv, ReachIKRelEnv, ReachJointPosEnv
 from mujoco_robot.core.ik_controller import (
     orientation_error_axis_angle,
     quat_multiply,
@@ -51,14 +51,17 @@ def check(condition: bool, msg: str, warn_only: bool = False) -> bool:
 
 
 def make(variant, **kw):
-    return URReachEnv(
+    variant_map = {
+        "ik_rel": ReachIKRelEnv,
+        "ik_abs": ReachIKAbsEnv,
+        "joint_pos": ReachJointPosEnv,
+    }
+    return variant_map[variant](
         robot=ROBOT,
-        control_variant=variant,
         time_limit=0,
         randomize_init=False,
         obs_noise=0.0,
         seed=SEED,
-        hold_seconds=0.0,
         **kw,
     )
 
@@ -309,10 +312,14 @@ for variant in VARIANTS:
     # 6. Reward structure check
     # ===================================================================
     print(f"\n--- 6. Reward sanity ---")
-    env = URReachEnv(
-        robot=ROBOT, control_variant=variant,
+    variant_map = {
+        "ik_rel": ReachIKRelEnv,
+        "ik_abs": ReachIKAbsEnv,
+        "joint_pos": ReachJointPosEnv,
+    }
+    env = variant_map[variant](
+        robot=ROBOT,
         time_limit=50, randomize_init=False, obs_noise=0.0, seed=SEED,
-        hold_seconds=0.0,
     )
     env.reset(seed=SEED)
     

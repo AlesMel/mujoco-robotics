@@ -2,15 +2,15 @@
 
 Quick start::
 
-    from mujoco_robot.envs import URReachEnv, ReachGymnasium
+    from mujoco_robot.envs.reach import ReachJointPosEnv, ReachJointPosGymnasium
 
     # Raw environment (no Gymnasium dependency)
-    env = URReachEnv(robot="ur5e")
+    env = ReachJointPosEnv(robot="ur5e")
     obs = env.reset()
     result = env.step(env.sample_action())
 
     # Gymnasium wrapper (for Stable-Baselines3 / VecEnv)
-    gym_env = ReachGymnasium(robot="ur5e")
+    gym_env = ReachJointPosGymnasium(robot="ur5e")
     obs, info = gym_env.reset()
     obs, reward, terminated, truncated, info = gym_env.step(gym_env.action_space.sample())
 
@@ -35,10 +35,10 @@ __version__ = "0.2.0"
 # ---------------------------------------------------------------------------
 import gymnasium
 
-# Default (backward-compatible) — dispatches via control_variant kwarg
+# Default reach ID points to joint-position control.
 gymnasium.register(
     id="MuJoCoRobot/Reach-v0",
-    entry_point="mujoco_robot.envs.reach_env:ReachGymnasium",
+    entry_point="mujoco_robot.envs.reach.reach_env_joint_pos:ReachJointPosGymnasium",
     max_episode_steps=360,
 )
 

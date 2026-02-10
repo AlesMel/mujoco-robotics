@@ -5,7 +5,7 @@ from typing import Any
 
 import numpy as np
 
-from mujoco_robot.envs.reach.mdp.terms import (
+from .terms import (
     ActionTermCfg,
     CommandTermCfg,
     ObservationTermCfg,

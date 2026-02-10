@@ -16,28 +16,16 @@ from typing import Any
 import gymnasium as gym
 
 from mujoco_robot.envs.reach import REACH_VARIANTS
-from mujoco_robot.envs.reach_env import ReachGymnasium
+from mujoco_robot.tasks.manager_based.manipulation.reach import (
+    get_reach_cfg,
+    make_reach_manager_based_gymnasium,
+)
 
 
 def _resolve_control_variant(
     control_variant: str | None,
-    action_mode: str | None,
 ) -> str:
-    """Resolve backward-compatible control aliases."""
-    if action_mode is not None:
-        alias = {"cartesian": "ik_rel", "joint": "joint_pos"}
-        if action_mode not in alias:
-            raise ValueError(
-                f"action_mode must be one of {tuple(alias)}, got '{action_mode}'"
-            )
-        mapped = alias[action_mode]
-        if control_variant is not None and control_variant != mapped:
-            raise ValueError(
-                "Conflicting inputs: action_mode implies "
-                f"'{mapped}' but control_variant is '{control_variant}'."
-            )
-        return mapped
-
+    """Validate and resolve control variant."""
     resolved = control_variant or "joint_pos"
     if resolved not in REACH_VARIANTS:
         raise ValueError(
@@ -156,7 +144,7 @@ def train_reach_skrl_ppo(
     log_dir: str = "runs_skrl",
     experiment_name: str = "reach_skrl_ppo",
     control_variant: str | None = None,
-    action_mode: str | None = None,
+    cfg_name: str = "ur3e_joint_pos_dense_stable",
     reach_threshold: float = 0.03,
     ori_threshold: float = 0.25,
     success_hold_steps: int = 10,
@@ -168,20 +156,24 @@ def train_reach_skrl_ppo(
 ) -> Any:
     """Train reach task with SKRL PPO using Isaac Lab-style PPO settings."""
     wrap_env, Runner = _require_skrl()
-    control_variant = _resolve_control_variant(control_variant, action_mode)
+    control_variant = _resolve_control_variant(control_variant)
 
-    env_kwargs = dict(
-        control_variant=control_variant,
-        reach_threshold=reach_threshold,
-        ori_threshold=ori_threshold,
-        success_hold_steps=success_hold_steps,
-        success_bonus=success_bonus,
-        stay_reward_weight=stay_reward_weight,
-        resample_on_success=resample_on_success,
-    )
+    def build_cfg(rank: int):
+        cfg = get_reach_cfg(cfg_name)
+        cfg.scene.robot = robot
+        cfg.episode.seed = seed + rank
+        cfg.actions.control_variant = control_variant
+        cfg.success.reach_threshold = reach_threshold
+        cfg.success.ori_threshold = ori_threshold
+        cfg.success.success_hold_steps = success_hold_steps
+        cfg.success.success_bonus = success_bonus
+        cfg.success.stay_reward_weight = stay_reward_weight
+        cfg.success.resample_on_success = resample_on_success
+        return cfg
 
     print(f"\n{'='*60}")
     print("  Reach training config (SKRL PPO)")
+    print(f"  Config profile:   {cfg_name}")
     print(f"  Robot:            {robot}")
     print(f"  Control variant:  {control_variant}")
     print(f"  Reach threshold:  {reach_threshold:.3f} m")
@@ -196,7 +188,7 @@ def train_reach_skrl_ppo(
     print(f"{'='*60}\n")
 
     def make_env(rank: int):
-        return lambda: ReachGymnasium(robot=robot, seed=seed + rank, **env_kwargs)
+        return lambda: make_reach_manager_based_gymnasium(build_cfg(rank))
 
     base_env = gym.vector.SyncVectorEnv([make_env(i) for i in range(n_envs)])
     env = wrap_env(base_env, wrapper="gymnasium")
@@ -232,13 +224,7 @@ def main() -> None:
         default=None,
         choices=sorted(REACH_VARIANTS.keys()),
     )
-    p.add_argument(
-        "--action-mode",
-        type=str,
-        default=None,
-        choices=["cartesian", "joint"],
-        help="Deprecated alias. cartesian->ik_rel, joint->joint_pos.",
-    )
+    p.add_argument("--cfg-name", type=str, default="ur3e_joint_pos_dense_stable")
     p.add_argument("--reach-threshold", type=float, default=0.03)
     p.add_argument("--ori-threshold", type=float, default=0.25)
     p.add_argument("--success-hold-steps", type=int, default=10)
@@ -256,7 +242,7 @@ def main() -> None:
         log_dir=args.log_dir,
         experiment_name=args.experiment_name,
         control_variant=args.control_variant,
-        action_mode=args.action_mode,
+        cfg_name=args.cfg_name,
         reach_threshold=args.reach_threshold,
         ori_threshold=args.ori_threshold,
         success_hold_steps=args.success_hold_steps,

@@ -8,7 +8,17 @@ import numpy as np
 import pytest
 
 import mujoco_robot  # noqa: F401  # ensures Gym IDs are registered
-from mujoco_robot.envs.reach_env import ReachGymnasium, URReachEnv
+from mujoco_robot.envs.reach import REACH_VARIANTS
+
+
+def _make_variant_env(variant: str, **kwargs):
+    env_cls, _ = REACH_VARIANTS[variant]
+    return env_cls(**kwargs)
+
+
+def _make_variant_gym(variant: str, **kwargs):
+    _, gym_cls = REACH_VARIANTS[variant]
+    return gym_cls(**kwargs)
 
 
 @pytest.mark.parametrize(
@@ -16,9 +26,9 @@ from mujoco_robot.envs.reach_env import ReachGymnasium, URReachEnv
 )
 def test_urreach_control_variants_smoke(variant: str) -> None:
     """Each control variant should reset and step without errors."""
-    env = URReachEnv(
+    env = _make_variant_env(
+        variant,
         robot="ur3e",
-        control_variant=variant,
         time_limit=0,
         randomize_init=False,
         seed=0,
@@ -57,9 +67,9 @@ def test_reach_gym_registration_variants(env_id: str) -> None:
 )
 def test_reach_collision_count_resets_on_reset(variant: str) -> None:
     """Reset should clear stale collision state in internals."""
-    env = URReachEnv(
+    env = _make_variant_env(
+        variant,
         robot="ur3e",
-        control_variant=variant,
         time_limit=0,
         randomize_init=False,
         obs_noise=0.0,
@@ -80,9 +90,9 @@ def test_reach_collision_count_resets_on_reset(variant: str) -> None:
 )
 def test_reach_time_limit_done_boundary_raw_env(variant: str) -> None:
     """Raw env done should flip exactly on the time_limit-th step."""
-    env = URReachEnv(
+    env = _make_variant_env(
+        variant,
         robot="ur3e",
-        control_variant=variant,
         time_limit=3,
         randomize_init=False,
         seed=0,
@@ -103,9 +113,9 @@ def test_reach_time_limit_done_boundary_raw_env(variant: str) -> None:
 )
 def test_reach_time_limit_boundary_gym_wrapper(variant: str) -> None:
     """Gym wrapper truncation should align with the same step boundary."""
-    env = ReachGymnasium(
+    env = _make_variant_gym(
+        variant,
         robot="ur3e",
-        control_variant=variant,
         time_limit=3,
     )
     env.reset(seed=0)
@@ -124,9 +134,9 @@ def test_reach_time_limit_boundary_gym_wrapper(variant: str) -> None:
 
 def test_joint_pos_isaac_reward_resample_period_is_time_based() -> None:
     """Goal resampling should follow elapsed seconds, not a hard-coded step count."""
-    env = URReachEnv(
+    env = _make_variant_env(
+        "joint_pos_isaac_reward",
         robot="ur3e",
-        control_variant="joint_pos_isaac_reward",
         time_limit=0,
         randomize_init=False,
         goal_resample_time_range_s=(4.0, 4.0),
@@ -155,9 +165,9 @@ def test_joint_pos_isaac_reward_resample_period_is_time_based() -> None:
 
 def test_joint_pos_isaac_reward_success_termination_flag_gym() -> None:
     """With task termination enabled, success should map to Gym terminated=True."""
-    env = ReachGymnasium(
+    env = _make_variant_gym(
+        "joint_pos_isaac_reward",
         robot="ur3e",
-        control_variant="joint_pos_isaac_reward",
         time_limit=0,
         terminate_on_success=True,
         # Force immediate success independent of the sampled command.
@@ -173,9 +183,9 @@ def test_joint_pos_isaac_reward_success_termination_flag_gym() -> None:
 
 def test_joint_pos_isaac_reward_defaults_do_not_resample_within_episode() -> None:
     """Built-in defaults should keep one goal for the full 12s episode."""
-    env = ReachGymnasium(
+    env = _make_variant_gym(
+        "joint_pos_isaac_reward",
         robot="ur3e",
-        control_variant="joint_pos_isaac_reward",
     )
     env.reset(seed=0)
 
@@ -198,9 +208,9 @@ def test_joint_pos_isaac_reward_defaults_do_not_resample_within_episode() -> Non
 
 def test_joint_pos_isaac_reward_control_defaults_match_isaac_style() -> None:
     """Isaac-style variant should use direct, no-deadzone relative joint targets."""
-    env = URReachEnv(
+    env = _make_variant_env(
+        "joint_pos_isaac_reward",
         robot="ur3e",
-        control_variant="joint_pos_isaac_reward",
         time_limit=0,
         randomize_init=False,
         seed=0,
@@ -216,9 +226,9 @@ def test_joint_pos_isaac_reward_control_defaults_match_isaac_style() -> None:
 
 def test_reach_goal_sampling_respects_table_boundaries() -> None:
     """Sampled goals should stay within the table footprint and z clearance."""
-    env = URReachEnv(
+    env = _make_variant_env(
+        "ik_rel",
         robot="ur3e",
-        control_variant="ik_rel",
         time_limit=0,
         randomize_init=False,
         seed=0,

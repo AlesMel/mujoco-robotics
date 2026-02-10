@@ -14,10 +14,10 @@ A tkinter-based graphical interface with:
 
 Usage::
 
-    from mujoco_robot.envs import URReachEnv
+    from mujoco_robot.envs.reach import ReachJointPosEnv
     from mujoco_robot.teleop.gui import GUITeleop
 
-    env = URReachEnv(robot="ur5e", time_limit=0)
+    env = ReachJointPosEnv(robot="ur5e", time_limit=0)
     GUITeleop(env).run()
 
 Or via CLI::
@@ -49,7 +49,7 @@ class GUITeleop:
     Parameters
     ----------
     env
-        A URReachEnv or URSlotSorterEnv instance.
+        A reach env variant or URSlotSorterEnv instance.
     task : str
         ``"reach"`` or ``"slot_sorter"`` — controls which buttons are shown.
     fps : int

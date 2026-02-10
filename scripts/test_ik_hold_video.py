@@ -21,7 +21,8 @@ from pathlib import Path
 import imageio.v3 as iio
 import numpy as np
 
-from mujoco_robot.envs.reach_env import URReachEnv
+from mujoco_robot.core.ik_controller import orientation_error_axis_angle
+from mujoco_robot.envs.reach import ReachIKRelEnv
 
 
 # ────────────────────────────────────────────────────────────────────────
@@ -74,11 +75,10 @@ def record_ik_hold_video(
 
     Returns the path to the saved video file.
     """
-    env = URReachEnv(
+    env = ReachIKRelEnv(
         robot=robot,
         render_size=(width, height),
         time_limit=0,
-        action_mode="cartesian",
         seed=42,
     )
     env.reset(seed=42)
@@ -93,8 +93,12 @@ def record_ik_hold_video(
             frames.append(frame)
 
     for wp_idx, (target_pos, target_yaw, label) in enumerate(waypoints):
+        target_quat = np.array(
+            [math.cos(target_yaw / 2), 0.0, 0.0, math.sin(target_yaw / 2)],
+            dtype=np.float32,
+        )
         # Place goal marker at target so it's visible in video
-        env._place_goal_marker(target_pos, target_yaw)
+        env._place_goal_marker(target_pos, target_quat)
 
         print(f"  [{robot}] Waypoint {wp_idx}: {label} → "
               f"pos={target_pos.round(3)}, yaw={target_yaw:.2f} rad")
@@ -111,11 +115,9 @@ def record_ik_hold_video(
             else:
                 action_xyz = np.zeros(3)
 
-            yaw_err = target_yaw - env._ee_yaw()
-            yaw_err = (yaw_err + math.pi) % (2 * math.pi) - math.pi
-            action_yaw = np.clip(yaw_err / env.yaw_step, -1.0, 1.0)
-
-            action = np.array([*action_xyz, action_yaw], dtype=np.float32)
+            ori_err_vec = orientation_error_axis_angle(env._ee_quat(), target_quat)
+            action_ori = np.clip(ori_err_vec / env.ori_step, -1.0, 1.0)
+            action = np.array([*action_xyz, *action_ori], dtype=np.float32)
             env.step(action)
 
             # Record every 2nd frame during drive
@@ -127,7 +129,7 @@ def record_ik_hold_video(
         # ── Hold phase ──
         hold_errors = []
         for step in range(hold_steps):
-            env.step(np.zeros(4, dtype=np.float32))
+            env.step(np.zeros(6, dtype=np.float32))
             ee_pos = env.data.site_xpos[env.ee_site].copy()
             hold_errors.append(float(np.linalg.norm(ee_pos - target_pos)))
 

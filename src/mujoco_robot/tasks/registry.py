@@ -4,10 +4,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Tuple, Type
 
-from mujoco_robot.tasks.reach import (
-    ReachTaskConfig,
-    make_reach_env,
-    make_reach_gymnasium,
+from mujoco_robot.tasks.manager_based.manipulation.reach import (
+    ReachEnvCfg,
+    make_reach_manager_based_env,
+    make_reach_manager_based_gymnasium,
 )
 from mujoco_robot.tasks.slot_sorter import (
     SlotSorterTaskConfig,
@@ -30,10 +30,10 @@ class TaskSpec:
 TASK_REGISTRY: Dict[str, TaskSpec] = {
     "reach": TaskSpec(
         name="reach",
-        description="3D end-effector reach task with multiple control variants.",
-        config_type=ReachTaskConfig,
-        make_raw=make_reach_env,
-        make_gymnasium=make_reach_gymnasium,
+        description="Config-first manager-based 3D end-effector reach task.",
+        config_type=ReachEnvCfg,
+        make_raw=make_reach_manager_based_env,
+        make_gymnasium=make_reach_manager_based_gymnasium,
     ),
     "slot_sorter": TaskSpec(
         name="slot_sorter",

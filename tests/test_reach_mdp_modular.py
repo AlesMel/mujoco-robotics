@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import numpy as np
 
-from mujoco_robot.envs.reach_env import URReachEnv
-from mujoco_robot.envs.reach.mdp import (
+from mujoco_robot.envs.reach import ReachIKRelEnv
+from mujoco_robot.tasks.manager_based.manipulation.reach.mdp import (
     ActionTermCfg,
     ObservationTermCfg,
     ReachRewardCfg,
@@ -35,9 +35,8 @@ def test_reach_mdp_reward_override_constant() -> None:
     cfg = make_default_reach_mdp_cfg()
     cfg.reward_terms = (RewardTermCfg("constant", _constant_reward, weight=2.5),)
 
-    env = URReachEnv(
+    env = ReachIKRelEnv(
         robot="ur3e",
-        control_variant="ik_rel",
         randomize_init=False,
         time_limit=0,
         mdp_cfg=cfg,
@@ -54,9 +53,8 @@ def test_reach_mdp_observation_override_dimension() -> None:
     cfg = make_default_reach_mdp_cfg()
     cfg.observation_terms = (ObservationTermCfg("goal_xy", _two_dim_obs),)
 
-    env = URReachEnv(
+    env = ReachIKRelEnv(
         robot="ur3e",
-        control_variant="ik_rel",
         randomize_init=False,
         time_limit=0,
         mdp_cfg=cfg,
@@ -72,9 +70,8 @@ def test_reach_mdp_action_override_hold_targets() -> None:
     cfg = make_default_reach_mdp_cfg()
     cfg.action_term = ActionTermCfg("hold", _hold_action)
 
-    env = URReachEnv(
+    env = ReachIKRelEnv(
         robot="ur3e",
-        control_variant="ik_rel",
         randomize_init=False,
         time_limit=0,
         mdp_cfg=cfg,
@@ -92,9 +89,8 @@ def test_reach_mdp_termination_override_success() -> None:
     cfg = make_default_reach_mdp_cfg()
     cfg.success_term = TerminationTermCfg("always_success", _always_true)
 
-    env = URReachEnv(
+    env = ReachIKRelEnv(
         robot="ur3e",
-        control_variant="ik_rel",
         randomize_init=False,
         time_limit=0,
         terminate_on_success=True,
@@ -117,9 +113,8 @@ def test_reach_reward_cfg_disables_all_default_terms() -> None:
         include_joint_vel=False,
     )
 
-    env = URReachEnv(
+    env = ReachIKRelEnv(
         robot="ur3e",
-        control_variant="ik_rel",
         randomize_init=False,
         time_limit=0,
         reward_cfg=reward_cfg,

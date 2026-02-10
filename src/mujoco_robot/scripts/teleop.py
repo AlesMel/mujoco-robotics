@@ -43,8 +43,9 @@ def main():
     if args.gui:
         from mujoco_robot.teleop.gui import GUITeleop
         if args.task == "reach":
-            from mujoco_robot.envs import URReachEnv
-            env = URReachEnv(robot=args.robot, time_limit=0)
+            from mujoco_robot.envs.reach import ReachJointPosEnv
+
+            env = ReachJointPosEnv(robot=args.robot, time_limit=0)
             GUITeleop(env, task="reach").run()
         elif args.task == "slot_sorter":
             from mujoco_robot.envs import URSlotSorterEnv
@@ -53,10 +54,10 @@ def main():
         return
 
     if args.task == "reach":
-        from mujoco_robot.envs import URReachEnv
+        from mujoco_robot.envs.reach import ReachJointPosEnv
         from mujoco_robot.teleop import ReachTeleop
 
-        env = URReachEnv(robot=args.robot, action_mode="joint", joint_action_scale=0.05)
+        env = ReachJointPosEnv(robot=args.robot, joint_action_scale=0.05)
         print(f"Robot: {args.robot} | reach: {env._TOTAL_REACH:.2f} m")
         ReachTeleop(env).run()
 

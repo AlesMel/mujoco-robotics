@@ -52,7 +52,7 @@ from mujoco_robot.envs.reach.reach_env_joint_pos_isaac_reward import (
     ReachJointPosIsaacRewardEnv,
     ReachJointPosIsaacRewardGymnasium,
 )
-from mujoco_robot.envs.reach.mdp import (
+from mujoco_robot.tasks.manager_based.manipulation.reach.mdp import (
     ActionTermCfg,
     ObservationTermCfg,
     RewardTermCfg,

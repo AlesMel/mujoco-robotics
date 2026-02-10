@@ -5,7 +5,7 @@ Usage::
     from mujoco_robot.training import BestEpisodeVideoCallback
 
     video_cb = BestEpisodeVideoCallback(
-        make_eval_env=lambda: Monitor(ReachGymnasium(render=True)),
+        make_eval_env=lambda: Monitor(make_reach_manager_based_gymnasium("ur3e_joint_pos")),
         save_every_timesteps=50_000,
         video_dir="videos",
         env_name="reach_ur5e",

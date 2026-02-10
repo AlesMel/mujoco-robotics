@@ -45,7 +45,7 @@ Guides 01–02 are the **math/robotics foundation**. Guide 03 is the **core envi
 | File | What it does | Related guide(s) |
 |------|-------------|-------------------|
 | `src/mujoco_robot/core/ik_controller.py` | Quaternion math + DLS IK | [01](01_3d_rotations_and_quaternions.md), [02](02_jacobian_and_inverse_kinematics.md) |
-| `src/mujoco_robot/envs/reach_env.py` | Full RL environment (obs, actions, rewards) | [03](03_rl_environment.md) |
+| `src/mujoco_robot/envs/reach/reach_env_base.py` | Core reach task logic (obs, rewards, stepping) | [03](03_rl_environment.md) |
 | `src/mujoco_robot/core/xml_builder.py` | MJCF XML construction | [04](04_mujoco_physics.md) |
 | `src/mujoco_robot/core/collision.py` | Self-collision detection | [04](04_mujoco_physics.md) |
 | `src/mujoco_robot/robots/configs.py` | Robot configurations (UR5e, UR3e) | [04](04_mujoco_physics.md) |

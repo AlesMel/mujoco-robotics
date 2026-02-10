@@ -40,7 +40,8 @@ from mujoco_robot.core.ik_controller import (
 )
 from mujoco_robot.core.collision import CollisionDetector
 from mujoco_robot.core.xml_builder import load_robot_xml, build_reach_xml
-from mujoco_robot.envs.reach.mdp import (
+from mujoco_robot.envs.manager_based import ManagerRuntime
+from mujoco_robot.tasks.manager_based.manipulation.reach.mdp import (
     ActionManager,
     CommandManager,
     ReachMDPCfg,
@@ -98,9 +99,6 @@ class ReachGymnasiumBase(gymnasium.Env):
                 "ReachGymnasiumBase requires either _env_cls to be set "
                 "in a subclass, or env_cls passed at __init__ time."
             )
-        # IsaacLab IK-Rel/Abs style default: no hold period.
-        if "hold_seconds" not in env_kwargs:
-            env_kwargs["hold_seconds"] = 0.0
         self.base = cls(
             robot=robot,
             render_size=(160, 120) if not high_res else (640, 480),
@@ -185,13 +183,11 @@ class URReachEnvBase:
         ori_step: float = 0.5,
         ori_abs_max: float = np.pi,
         joint_action_scale: float = 0.5,
-        reach_threshold: float = 0.001, # meters
-        ori_threshold: float = 0.01, # radians
+        reach_threshold: float = 0.001,  # meters
+        ori_threshold: float = 0.01,  # radians
         terminate_on_success: bool = False,
         terminate_on_collision: bool = False,
-        hold_seconds: float = 2.0,  # deprecated, kept for API compatibility
         goal_resample_time_range_s: Tuple[float, float] | None = None,
-        goal_resample_interval: Optional[int] = None,  # deprecated
         success_hold_steps: int = 10,
         success_bonus: float = 0.25,
         stay_reward_weight: float = 0.05,
@@ -201,7 +197,7 @@ class URReachEnvBase:
         joint_vel_weight: float = 0.0001,
         randomize_init: bool = True,
         init_q_range: Tuple[float, float] = (0.75, 1.25),
-        actuator_kp: float = 250.0,
+        actuator_kp: float = 100.0,
         min_joint_damping: float = 20.0,
         min_joint_frictionloss: float = 1.0,
         render_size: Tuple[int, int] = (960, 720),
@@ -245,11 +241,7 @@ class URReachEnvBase:
         self.stay_reward_weight = float(stay_reward_weight)
         self.resample_on_success = bool(resample_on_success)
         default_step_dt = (1.0 / 60.0) * 2.0
-        if goal_resample_interval is not None:
-            # Backward compatibility for old step-count API.
-            fixed_s = float(goal_resample_interval) * default_step_dt
-            self.goal_resample_time_range_s = (fixed_s, fixed_s)
-        elif goal_resample_time_range_s is None:
+        if goal_resample_time_range_s is None:
             # Default: avoid in-episode goal switches when episode is finite.
             if self.time_limit > 0:
                 episode_s = float(self.time_limit) * default_step_dt
@@ -383,18 +375,25 @@ class URReachEnvBase:
                 self._mdp_cfg.command_term,
                 resampling_time_range_s=self.goal_resample_time_range_s,
             )
-        self._action_manager = ActionManager(self, self._mdp_cfg.action_term)
-        self._command_manager = CommandManager(self, self._mdp_cfg.command_term)
-        self._observation_manager = ObservationManager(
-            self, self._mdp_cfg.observation_terms
+        self._manager_runtime = ManagerRuntime()
+        self._manager_runtime.add_many(
+            action=ActionManager(self, self._mdp_cfg.action_term),
+            command=CommandManager(self, self._mdp_cfg.command_term),
+            observation=ObservationManager(self, self._mdp_cfg.observation_terms),
+            reward=RewardManager(self, self._mdp_cfg.reward_terms),
+            termination=TerminationManager(
+                self,
+                self._mdp_cfg.success_term,
+                self._mdp_cfg.failure_term,
+                self._mdp_cfg.timeout_term,
+            ),
         )
-        self._reward_manager = RewardManager(self, self._mdp_cfg.reward_terms)
-        self._termination_manager = TerminationManager(
-            self,
-            self._mdp_cfg.success_term,
-            self._mdp_cfg.failure_term,
-            self._mdp_cfg.timeout_term,
-        )
+        # Backward-compatible aliases for existing internal accesses.
+        self._action_manager = self._manager("action")
+        self._command_manager = self._manager("command")
+        self._observation_manager = self._manager("observation")
+        self._reward_manager = self._manager("reward")
+        self._termination_manager = self._manager("termination")
 
     # -------------------------------------------------------------- Properties
     def _build_default_mdp_cfg(self) -> ReachMDPCfg:
@@ -420,6 +419,10 @@ class URReachEnvBase:
             cfg.timeout_term = defaults.timeout_term
         return cfg
 
+    def _manager(self, name: str):
+        """Return one manager from the runtime registry."""
+        return self._manager_runtime.require(name)
+
     @property
     def action_dim(self) -> int:
         """Action dimensionality (overridable by subclasses)."""
@@ -432,8 +435,8 @@ class URReachEnvBase:
         Matches Isaac Lab reach env: joint_pos(6) + joint_vel(6) +
         pose_command(7) + last_action(action_dim).
         """
-        if hasattr(self, "_observation_manager"):
-            return int(self._observation_manager.dim)
+        if hasattr(self, "_manager_runtime") and self._manager_runtime.has("observation"):
+            return int(self._manager("observation").dim)
         return 19 + self.action_dim
 
     # -------------------------------------------------------------- Reset
@@ -485,7 +488,7 @@ class URReachEnvBase:
         self._home_quat = self._ee_quat()
 
         # Sample initial command through command manager.
-        self._command_manager.reset()
+        self._manager("command").reset()
         self._resample_goal()
 
         for _ in range(self.settle_steps):
@@ -711,7 +714,7 @@ class URReachEnvBase:
 
     def _observe(self) -> np.ndarray:
         """Build observation vector from configured observation terms."""
-        obs = self._observation_manager.observe()
+        obs = self._manager("observation").observe()
 
         # Observation noise on proprioceptive channels (first 12: joint_pos + joint_vel)
         # Matches Isaac Lab: Unoise(n_min=-0.01, n_max=0.01) on both terms.
@@ -731,7 +734,7 @@ class URReachEnvBase:
 
     def _resample_goal(self) -> None:
         """Apply the currently sampled command pose as the active goal."""
-        pose_command = self._command_manager.pose_command
+        pose_command = self._manager("command").pose_command
         self.goal_pos = pose_command[:3].astype(float)
         self.goal_quat = quat_unique(pose_command[3:7].astype(float))
         self._place_goal_marker(self.goal_pos, self.goal_quat)
@@ -741,7 +744,7 @@ class URReachEnvBase:
     def _maybe_resample_goal(self) -> tuple[bool, str]:
         """Advance command timer and resample when the sampled duration elapses."""
         step_dt = self.model.opt.timestep * self.n_substeps
-        if not self._command_manager.step(step_dt):
+        if not self._manager("command").step(step_dt):
             return False, "none"
 
         self._goals_resampled += 1
@@ -750,10 +753,23 @@ class URReachEnvBase:
 
     def _resample_goal_after_success(self) -> tuple[bool, str]:
         """Resample command pose immediately after hold-success."""
-        self._command_manager.reset()
+        self._manager("command").reset()
         self._goals_resampled += 1
         self._resample_goal()
         return True, "success"
+
+    def resample_goal_now(self) -> np.ndarray:
+        """Force a new goal command immediately.
+
+        This is intended for interactive evaluation/debug workflows.
+        Returns the newly active goal position.
+        """
+        self._manager("command").reset()
+        self._goals_resampled += 1
+        self._resample_goal()
+        # Treat next step as a fresh goal attempt.
+        self._prev_success = False
+        return self.goal_pos.copy()
 
     def _compute_done_flags(
         self,
@@ -762,7 +778,7 @@ class URReachEnvBase:
     ) -> tuple[bool, bool, bool, bool, bool]:
         """Compute done flags via the configured termination manager."""
         ctx = {"dist": float(dist), "ori_err": float(ori_err_mag)}
-        flags = self._termination_manager.compute(ctx)
+        flags = self._manager("termination").compute(ctx)
         return (
             bool(flags["success"]),
             bool(flags["failure"]),
@@ -791,7 +807,7 @@ class URReachEnvBase:
             "joint_vel_l2": joint_vel_l2,
         }
 
-        reward, raw_reward_terms, _weighted_terms = self._reward_manager.compute(ctx)
+        reward, raw_reward_terms, _weighted_terms = self._manager("reward").compute(ctx)
 
         success, failure, terminated, time_up, done = self._compute_done_flags(dist, ori_err_mag)
         if success and not self._prev_success:
@@ -821,6 +837,7 @@ class URReachEnvBase:
                 goal_resampled, goal_resample_reason = self._resample_goal_after_success()
             else:
                 goal_resampled, goal_resample_reason = self._maybe_resample_goal()
+        command_manager = self._manager("command")
 
         info = {
             "dist": dist,
@@ -837,8 +854,8 @@ class URReachEnvBase:
             "failure": failure,
             "terminated": terminated,
             "time_out": time_up,
-            "goal_resample_elapsed_s": self._command_manager.elapsed_s,
-            "goal_resample_target_s": self._command_manager.target_s,
+            "goal_resample_elapsed_s": command_manager.elapsed_s,
+            "goal_resample_target_s": command_manager.target_s,
             "goal_resampled": goal_resampled,
             "goal_resample_reason": goal_resample_reason,
             "goals_reached": self._goals_reached,
@@ -907,7 +924,7 @@ class URReachEnvBase:
         self._last_action = act.astype(np.float32).copy()
 
         # Delegate to configured action term via manager
-        qpos_targets = self._action_manager.compute_joint_targets(act)
+        qpos_targets = self._manager("action").compute_joint_targets(act)
         qpos_targets = self._clamp_to_limits(qpos_targets)
         self._last_targets = qpos_targets.copy()
 

@@ -10,7 +10,7 @@ import mujoco_robot  # noqa: F401  # ensures Gym IDs are registered
 from mujoco_robot.envs.slot_sorter import URSlotSorterEnv as NewSlotSorterEnv
 from mujoco_robot.envs.slot_sorter_env import URSlotSorterEnv as LegacySlotSorterEnv
 from mujoco_robot.tasks import (
-    ReachTaskConfig,
+    ReachEnvCfg,
     SlotSorterTaskConfig,
     get_task_spec,
     list_tasks,
@@ -44,15 +44,15 @@ def test_make_task_rejects_wrong_config_type() -> None:
 
 def test_make_reach_task_raw_smoke() -> None:
     """Reach task factory should build a working raw environment."""
+    cfg = ReachEnvCfg()
+    cfg.scene.robot = "ur3e"
+    cfg.actions.control_variant = "ik_rel"
+    cfg.episode.seed = 0
+    cfg.episode.time_limit = 0
+    cfg.randomization.randomize_init = False
     env = make_task(
         "reach",
-        config=ReachTaskConfig(
-            robot="ur3e",
-            control_variant="ik_rel",
-            time_limit=0,
-            seed=0,
-            env_kwargs={"randomize_init": False},
-        ),
+        config=cfg,
     )
     obs = env.reset(seed=0)
     assert obs.shape == (env.observation_dim,)
@@ -64,16 +64,16 @@ def test_make_reach_task_raw_smoke() -> None:
 
 def test_make_reach_task_gym_smoke() -> None:
     """Reach task factory should build a working Gymnasium wrapper."""
+    cfg = ReachEnvCfg()
+    cfg.scene.robot = "ur3e"
+    cfg.actions.control_variant = "joint_pos"
+    cfg.episode.time_limit = 2
+    cfg.episode.seed = 0
+    cfg.randomization.randomize_init = False
     env = make_task(
         "reach",
         gymnasium=True,
-        config=ReachTaskConfig(
-            robot="ur3e",
-            control_variant="joint_pos",
-            time_limit=2,
-            seed=0,
-            env_kwargs={"randomize_init": False},
-        ),
+        config=cfg,
     )
     obs, _ = env.reset(seed=0)
     assert obs.shape == env.observation_space.shape

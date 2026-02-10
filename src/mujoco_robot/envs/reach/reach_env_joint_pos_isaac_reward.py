@@ -32,7 +32,6 @@ class ReachJointPosIsaacRewardEnv(ReachJointPosEnv):
         kwargs.setdefault("joint_action_scale", ISAAC_JOINT_ACTION_SCALE)
         kwargs.setdefault("terminate_on_success", False)
         kwargs.setdefault("terminate_on_collision", False)
-        kwargs.setdefault("hold_seconds", 0.0)
         super().__init__(robot=robot, **kwargs)
         # Isaac action term has no deadzone around zero.
         self.hold_eps = ISAAC_ACTION_DEADZONE

@@ -1,9 +1,9 @@
 """Diagnostic: check if the environment is working properly."""
-from mujoco_robot.envs import URReachEnv
+from mujoco_robot.envs.reach import ReachIKRelEnv, ReachJointPosEnv
 import numpy as np
 
 # Test with JOINT mode (default for training)
-env = URReachEnv(robot="ur5e", action_mode="joint", time_limit=200, seed=42, randomize_init=False)
+env = ReachJointPosEnv(robot="ur5e", time_limit=200, seed=42, randomize_init=False)
 obs = env.reset()
 print("=== JOINT MODE ===")
 print(f"EE pos:  {env.data.site_xpos[env.ee_site]}")
@@ -23,7 +23,7 @@ env.close()
 
 # Test CARTESIAN mode with proportional position control
 print("\n=== CARTESIAN MODE (proportional position-only control) ===")
-env3 = URReachEnv(robot="ur5e", action_mode="cartesian", time_limit=300, seed=42, randomize_init=False)
+env3 = ReachIKRelEnv(robot="ur5e", time_limit=300, seed=42, randomize_init=False)
 obs = env3.reset()
 print(f"EE pos:  {env3.data.site_xpos[env3.ee_site]}")
 print(f"Goal pos: {env3.goal_pos}")
@@ -54,7 +54,7 @@ env3.close()
 
 # Test CARTESIAN mode with pos + ori control
 print("\n=== CARTESIAN MODE (position + orientation control) ===")
-env4 = URReachEnv(robot="ur5e", action_mode="cartesian", time_limit=300, seed=42, randomize_init=False)
+env4 = ReachIKRelEnv(robot="ur5e", time_limit=300, seed=42, randomize_init=False)
 obs = env4.reset()
 
 from mujoco_robot.core.ik_controller import orientation_error_axis_angle
@@ -92,7 +92,7 @@ env4.close()
 
 # Direct IK controller test
 print("\n=== IK CONTROLLER DIRECT TEST ===")
-env5 = URReachEnv(robot="ur5e", action_mode="cartesian", time_limit=200, seed=42, randomize_init=False)
+env5 = ReachIKRelEnv(robot="ur5e", time_limit=200, seed=42, randomize_init=False)
 obs = env5.reset()
 qvel = env5._ik.solve(env5.goal_pos, env5.goal_quat)
 pos_err = env5.goal_pos - env5.data.site_xpos[env5.ee_site]
