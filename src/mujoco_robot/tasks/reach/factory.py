@@ -15,6 +15,8 @@ def make_reach_env(config: ReachTaskConfig | None = None):
         kwargs.setdefault("seed", cfg.seed)
     if cfg.mdp_cfg is not None:
         kwargs.setdefault("mdp_cfg", cfg.mdp_cfg)
+    if cfg.reward_cfg is not None:
+        kwargs.setdefault("reward_cfg", cfg.reward_cfg)
     return URReachEnv(
         robot=cfg.robot,
         control_variant=cfg.control_variant,
@@ -30,6 +32,8 @@ def make_reach_gymnasium(config: ReachTaskConfig | None = None) -> ReachGymnasiu
         kwargs.setdefault("time_limit", cfg.time_limit)
     if cfg.mdp_cfg is not None:
         kwargs.setdefault("mdp_cfg", cfg.mdp_cfg)
+    if cfg.reward_cfg is not None:
+        kwargs.setdefault("reward_cfg", cfg.reward_cfg)
     return ReachGymnasium(
         robot=cfg.robot,
         control_variant=cfg.control_variant,

@@ -16,6 +16,7 @@ from mujoco_robot.envs.reach.mdp.managers import (
     TerminationManager,
 )
 from mujoco_robot.envs.reach.mdp.config import (
+    ReachRewardCfg,
     default_command_term,
     default_observation_terms,
     default_reward_terms,
@@ -38,6 +39,7 @@ __all__ = [
     "ObservationManager",
     "RewardManager",
     "TerminationManager",
+    "ReachRewardCfg",
     "default_command_term",
     "default_observation_terms",
     "default_reward_terms",

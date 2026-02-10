@@ -4,6 +4,7 @@ from mujoco_robot.tasks.reach.config import ReachTaskConfig
 from mujoco_robot.tasks.reach.factory import make_reach_env, make_reach_gymnasium
 from mujoco_robot.envs.reach.mdp import (
     ReachMDPCfg,
+    ReachRewardCfg,
     ActionTermCfg,
     ObservationTermCfg,
     RewardTermCfg,
@@ -16,6 +17,7 @@ __all__ = [
     "make_reach_env",
     "make_reach_gymnasium",
     "ReachMDPCfg",
+    "ReachRewardCfg",
     "ActionTermCfg",
     "ObservationTermCfg",
     "RewardTermCfg",

@@ -8,6 +8,7 @@ from mujoco_robot.envs.reach_env import URReachEnv
 from mujoco_robot.envs.reach.mdp import (
     ActionTermCfg,
     ObservationTermCfg,
+    ReachRewardCfg,
     RewardTermCfg,
     TerminationTermCfg,
     make_default_reach_mdp_cfg,
@@ -104,4 +105,31 @@ def test_reach_mdp_termination_override_success() -> None:
     step = env.step(np.zeros(env.action_dim, dtype=np.float32))
     assert step.done is True
     assert bool(step.info["terminated"]) is True
+    env.close()
+
+
+def test_reach_reward_cfg_disables_all_default_terms() -> None:
+    reward_cfg = ReachRewardCfg(
+        position_error_weight=0.0,
+        position_tanh_weight=0.0,
+        orientation_error_weight=0.0,
+        include_action_rate=False,
+        include_joint_vel=False,
+    )
+
+    env = URReachEnv(
+        robot="ur3e",
+        control_variant="ik_rel",
+        randomize_init=False,
+        time_limit=0,
+        reward_cfg=reward_cfg,
+        success_bonus=0.0,
+        stay_reward_weight=0.0,
+        reach_threshold=0.0,
+        ori_threshold=0.0,
+        seed=0,
+    )
+    env.reset(seed=0)
+    step = env.step(np.zeros(env.action_dim, dtype=np.float32))
+    assert np.isclose(step.reward, 0.0)
     env.close()

@@ -47,6 +47,22 @@ def main():
         "--sb3-verbose", type=int, default=0, choices=[0, 1, 2],
         help="Stable-Baselines3 verbosity for reach training (default: 0).",
     )
+    p.add_argument(
+        "--success-hold-steps", type=int, default=10,
+        help="Consecutive success steps required for hold-success in reach task.",
+    )
+    p.add_argument(
+        "--success-bonus", type=float, default=0.25,
+        help="One-time reward added when hold-success is first achieved.",
+    )
+    p.add_argument(
+        "--stay-reward-weight", type=float, default=0.05,
+        help="Per-second reward weight while hold-success is maintained.",
+    )
+    p.add_argument(
+        "--resample-on-success", action=argparse.BooleanOptionalAction, default=False,
+        help="Resample goal immediately after hold-success.",
+    )
     p.add_argument("--total-timesteps", type=int, default=500_000)
     p.add_argument("--n-envs", type=int, default=8)
     p.add_argument("--save-video", action=argparse.BooleanOptionalAction, default=True)
@@ -65,6 +81,10 @@ def main():
             save_video_every=args.save_video_every,
             reach_threshold=args.reach_threshold,
             ori_threshold=args.ori_threshold,
+            success_hold_steps=args.success_hold_steps,
+            success_bonus=args.success_bonus,
+            stay_reward_weight=args.stay_reward_weight,
+            resample_on_success=args.resample_on_success,
             progress_bar=args.progress_bar,
             sb3_verbose=args.sb3_verbose,
         )

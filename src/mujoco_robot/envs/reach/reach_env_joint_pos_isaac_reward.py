@@ -8,7 +8,6 @@ from mujoco_robot.envs.reach.reach_env_joint_pos import ReachJointPosEnv
 ISAAC_CONTROL_DT_S = (1.0 / 60.0) * 2.0
 ISAAC_EPISODE_SECONDS = 12.0
 ISAAC_EPISODE_STEPS = int(round(ISAAC_EPISODE_SECONDS / ISAAC_CONTROL_DT_S))
-ISAAC_GOAL_RESAMPLE_TIME_RANGE_S = (4.0, 4.0)
 ISAAC_JOINT_ACTION_SCALE = 0.5
 ISAAC_ACTION_DEADZONE = 0.0
 ISAAC_EMA_ALPHA = 1.0
@@ -19,7 +18,7 @@ class ReachJointPosIsaacRewardEnv(ReachJointPosEnv):
 
     Defaults are configured to mirror IsaacLab reach settings:
     - episode length ~= 12.0 s
-    - command resampling window = [4.0, 4.0] s
+    - default command resampling disabled within episode (window > episode)
     - direct relative joint-position targets (no EMA smoothing)
     - action scale = 0.5
     - no task-based termination by default (timeout only)
@@ -30,7 +29,6 @@ class ReachJointPosIsaacRewardEnv(ReachJointPosEnv):
 
     def __init__(self, robot: str = "ur5e", **kwargs) -> None:
         kwargs.setdefault("time_limit", self.DEFAULT_TIME_LIMIT)
-        kwargs.setdefault("goal_resample_time_range_s", ISAAC_GOAL_RESAMPLE_TIME_RANGE_S)
         kwargs.setdefault("joint_action_scale", ISAAC_JOINT_ACTION_SCALE)
         kwargs.setdefault("terminate_on_success", False)
         kwargs.setdefault("terminate_on_collision", False)

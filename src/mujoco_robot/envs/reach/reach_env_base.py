@@ -24,6 +24,7 @@ from typing import Dict, Iterable, Optional, Tuple
 import gymnasium
 import mujoco
 import numpy as np
+from PIL import Image, ImageDraw, ImageFont
 
 from mujoco_robot.robots.actuators import (
     configure_position_actuators,
@@ -43,6 +44,7 @@ from mujoco_robot.envs.reach.mdp import (
     ActionManager,
     CommandManager,
     ReachMDPCfg,
+    ReachRewardCfg,
     ObservationManager,
     RewardManager,
     TerminationManager,
@@ -183,13 +185,17 @@ class URReachEnvBase:
         ori_step: float = 0.5,
         ori_abs_max: float = np.pi,
         joint_action_scale: float = 0.5,
-        reach_threshold: float = 0.03,
-        ori_threshold: float = 0.25,
+        reach_threshold: float = 0.001, # meters
+        ori_threshold: float = 0.01, # radians
         terminate_on_success: bool = False,
         terminate_on_collision: bool = False,
         hold_seconds: float = 2.0,  # deprecated, kept for API compatibility
-        goal_resample_time_range_s: Tuple[float, float] = (4.0, 4.0),
+        goal_resample_time_range_s: Tuple[float, float] | None = None,
         goal_resample_interval: Optional[int] = None,  # deprecated
+        success_hold_steps: int = 10,
+        success_bonus: float = 0.25,
+        stay_reward_weight: float = 0.05,
+        resample_on_success: bool = False,
         obs_noise: float = 0.01,
         action_rate_weight: float = 0.0001,
         joint_vel_weight: float = 0.0001,
@@ -200,6 +206,7 @@ class URReachEnvBase:
         min_joint_frictionloss: float = 1.0,
         render_size: Tuple[int, int] = (960, 720),
         seed: Optional[int] = None,
+        reward_cfg: ReachRewardCfg | None = None,
         mdp_cfg: ReachMDPCfg | None = None,
     ) -> None:
         self._rng = np.random.default_rng(seed)
@@ -226,17 +233,31 @@ class URReachEnvBase:
         self.min_joint_damping = float(min_joint_damping)
         self.min_joint_frictionloss = float(min_joint_frictionloss)
         self.render_size = render_size
+        self._reward_cfg = reward_cfg
 
         # Isaac-style: command resampling based on elapsed wall-clock time.
         self.reach_threshold = reach_threshold
         self.ori_threshold = ori_threshold
         self.terminate_on_success = terminate_on_success
         self.terminate_on_collision = terminate_on_collision
+        self.success_hold_steps = max(1, int(success_hold_steps))
+        self.success_bonus = float(success_bonus)
+        self.stay_reward_weight = float(stay_reward_weight)
+        self.resample_on_success = bool(resample_on_success)
+        default_step_dt = (1.0 / 60.0) * 2.0
         if goal_resample_interval is not None:
             # Backward compatibility for old step-count API.
-            default_step_dt = (1.0 / 60.0) * 2.0
             fixed_s = float(goal_resample_interval) * default_step_dt
             self.goal_resample_time_range_s = (fixed_s, fixed_s)
+        elif goal_resample_time_range_s is None:
+            # Default: avoid in-episode goal switches when episode is finite.
+            if self.time_limit > 0:
+                episode_s = float(self.time_limit) * default_step_dt
+                no_resample_s = episode_s + default_step_dt
+                self.goal_resample_time_range_s = (no_resample_s, no_resample_s)
+            else:
+                # Infinite-horizon fallback keeps periodic commands.
+                self.goal_resample_time_range_s = (4.0, 4.0)
         else:
             lo_s, hi_s = goal_resample_time_range_s
             lo_s = float(lo_s)
@@ -347,6 +368,11 @@ class URReachEnvBase:
         self._init_dist = 1.0
         self._init_ori_err = np.pi
         self._goals_reached = 0
+        self._goals_held = 0
+        self._goals_resampled = 0
+        self._prev_success = False
+        self._success_streak_steps = 0
+        self._goal_hold_completed = False
         self._last_action = np.zeros(self.action_dim, dtype=np.float32)
         self._prev_action = np.zeros(self.action_dim, dtype=np.float32)
 
@@ -373,7 +399,7 @@ class URReachEnvBase:
     # -------------------------------------------------------------- Properties
     def _build_default_mdp_cfg(self) -> ReachMDPCfg:
         """Return default manager-based MDP config for this environment."""
-        return make_default_reach_mdp_cfg()
+        return make_default_reach_mdp_cfg(reward_cfg=self._reward_cfg)
 
     def _resolve_mdp_cfg(self, mdp_cfg: ReachMDPCfg | None) -> ReachMDPCfg:
         cfg = mdp_cfg or self._build_default_mdp_cfg()
@@ -419,6 +445,11 @@ class URReachEnvBase:
         mujoco.mj_resetData(self.model, self.data)
         self.step_id = 0
         self._goals_reached = 0
+        self._goals_held = 0
+        self._goals_resampled = 0
+        self._prev_success = False
+        self._success_streak_steps = 0
+        self._goal_hold_completed = False
         self._self_collision_count = 0
         self._last_targets = self.init_q.copy()
         self._last_action = np.zeros(self.action_dim, dtype=np.float32)
@@ -704,16 +735,25 @@ class URReachEnvBase:
         self.goal_pos = pose_command[:3].astype(float)
         self.goal_quat = quat_unique(pose_command[3:7].astype(float))
         self._place_goal_marker(self.goal_pos, self.goal_quat)
+        self._success_streak_steps = 0
+        self._goal_hold_completed = False
 
-    def _maybe_resample_goal(self) -> bool:
+    def _maybe_resample_goal(self) -> tuple[bool, str]:
         """Advance command timer and resample when the sampled duration elapses."""
         step_dt = self.model.opt.timestep * self.n_substeps
         if not self._command_manager.step(step_dt):
-            return False
+            return False, "none"
 
-        self._goals_reached += 1
+        self._goals_resampled += 1
         self._resample_goal()
-        return True
+        return True, "timer"
+
+    def _resample_goal_after_success(self) -> tuple[bool, str]:
+        """Resample command pose immediately after hold-success."""
+        self._command_manager.reset()
+        self._goals_resampled += 1
+        self._resample_goal()
+        return True, "success"
 
     def _compute_done_flags(
         self,
@@ -733,6 +773,11 @@ class URReachEnvBase:
 
     def _compute_reward(self) -> Tuple[float, bool, Dict]:
         """Compute reward and done flags from configured manager terms."""
+        # Keep goal snapshots so returned metrics stay consistent even if we
+        # resample the command pose at the end of this step.
+        goal_pos_step = self.goal_pos.copy()
+        goal_quat_step = self.goal_quat.copy()
+
         dist = self._ee_goal_dist()
         ori_err_mag = self._orientation_error_magnitude()
         action_delta = self._last_action - self._prev_action
@@ -746,31 +791,74 @@ class URReachEnvBase:
             "joint_vel_l2": joint_vel_l2,
         }
 
-        goal_resampled = self._maybe_resample_goal()
         reward, raw_reward_terms, _weighted_terms = self._reward_manager.compute(ctx)
 
         success, failure, terminated, time_up, done = self._compute_done_flags(dist, ori_err_mag)
+        if success and not self._prev_success:
+            self._goals_reached += 1
+        self._prev_success = success
+        if success:
+            self._success_streak_steps += 1
+        else:
+            self._success_streak_steps = 0
+
+        hold_success = bool(success and self._success_streak_steps >= self.success_hold_steps)
+        first_hold = bool(hold_success and not self._goal_hold_completed)
+        if first_hold:
+            self._goal_hold_completed = True
+            self._goals_held += 1
+
+        step_dt = float(self.model.opt.timestep * self.n_substeps)
+        stay_reward = float(self.stay_reward_weight * step_dt if hold_success else 0.0)
+        success_bonus = float(self.success_bonus if first_hold else 0.0)
+        reward = float(reward + stay_reward + success_bonus)
+        success_streak_steps = int(self._success_streak_steps)
+
+        goal_resampled = False
+        goal_resample_reason = "none"
+        if not done:
+            if self.resample_on_success and first_hold:
+                goal_resampled, goal_resample_reason = self._resample_goal_after_success()
+            else:
+                goal_resampled, goal_resample_reason = self._maybe_resample_goal()
 
         info = {
             "dist": dist,
             "ori_err": ori_err_mag,
+            "within_position_threshold": bool(dist < self.reach_threshold),
+            "within_orientation_threshold": bool(ori_err_mag < self.ori_threshold),
             "success": success,
+            "hold_success": hold_success,
+            "first_hold_success": first_hold,
+            "success_streak_steps": success_streak_steps,
+            "success_hold_steps": self.success_hold_steps,
+            "success_bonus": success_bonus,
+            "stay_reward": stay_reward,
             "failure": failure,
             "terminated": terminated,
             "time_out": time_up,
             "goal_resample_elapsed_s": self._command_manager.elapsed_s,
             "goal_resample_target_s": self._command_manager.target_s,
             "goal_resampled": goal_resampled,
+            "goal_resample_reason": goal_resample_reason,
             "goals_reached": self._goals_reached,
+            "goals_held": self._goals_held,
+            "goals_resampled": self._goals_resampled,
             "self_collisions": self._self_collision_count,
             "ee_pos": self.data.site_xpos[self.ee_site].copy(),
             "ee_quat": self._ee_quat(),
-            "goal_pos": self.goal_pos.copy(),
-            "goal_quat": self.goal_quat.copy(),
+            # Goal used to compute this step's dist/orientation metrics.
+            "goal_pos": goal_pos_step,
+            "goal_quat": goal_quat_step,
+            # Active command after potential end-of-step resample.
+            "active_goal_pos": self.goal_pos.copy(),
+            "active_goal_quat": self.goal_quat.copy(),
         }
         if self._mdp_cfg.include_reward_terms_in_info:
             reward_terms = dict(raw_reward_terms)
-            reward_terms["step_dt"] = float(self.model.opt.timestep * self.n_substeps)
+            reward_terms["success_bonus"] = success_bonus
+            reward_terms["stay_reward"] = stay_reward
+            reward_terms["step_dt"] = step_dt
             info["reward_terms"] = reward_terms
         return float(reward), done, info
 
@@ -837,8 +925,122 @@ class URReachEnvBase:
         return StepResult(self._observe(), reward, done, info)
 
     # -------------------------------------------------------------- Render
+    def _draw_metrics_overlay(self, frame: np.ndarray) -> np.ndarray:
+        """Draw a translucent HUD with live metrics on the rendered frame.
+
+        Metrics displayed:
+        - Distance to target (m)
+        - Orientation error (deg)
+        - Per-joint angles (deg) and velocities (deg/s)
+        - Step counter, goals reached, self-collisions
+        """
+        h, w = frame.shape[:2]
+
+        # --- Gather metrics ---
+        dist = self._ee_goal_dist()
+        ori_err_rad = self._orientation_error_magnitude()
+        ori_err_deg = float(np.degrees(ori_err_rad))
+
+        joint_pos_rad = np.array(
+            [self.data.qpos[qid] for qid in self._robot_qpos_ids]
+        )
+        joint_vel_rad = self.data.qvel[self.robot_dofs]
+        joint_pos_deg = np.degrees(joint_pos_rad)
+        joint_vel_deg = np.degrees(joint_vel_rad)
+
+        ee_pos = self.data.site_xpos[self.ee_site].copy()
+
+        # --- Build text lines ---
+        lines: list[tuple[str, tuple[int, int, int]]] = []
+        # Header
+        lines.append((f"Step {self.step_id:>5d} / {self.time_limit}", (255, 255, 255)))
+        lines.append(("", (255, 255, 255)))  # spacer
+
+        # Distance: green when close, yellow mid, red far
+        if dist < self.reach_threshold:
+            dist_color = (0, 255, 0)
+        elif dist < self.reach_threshold * 5:
+            dist_color = (255, 255, 0)
+        else:
+            dist_color = (255, 100, 100)
+        lines.append((f"Distance:    {dist*100:6.2f} cm  ({dist:.4f} m)", dist_color))
+
+        # Orientation error: green < threshold, yellow mid, red far
+        if ori_err_rad < self.ori_threshold:
+            ori_color = (0, 255, 0)
+        elif ori_err_deg < 30.0:
+            ori_color = (255, 255, 0)
+        else:
+            ori_color = (255, 100, 100)
+        lines.append((f"Ori error:   {ori_err_deg:6.2f} deg ({ori_err_rad:.4f} rad)", ori_color))
+        lines.append(("", (255, 255, 255)))  # spacer
+
+        # EE position
+        lines.append((
+            f"EE pos:  x={ee_pos[0]:+.3f}  y={ee_pos[1]:+.3f}  z={ee_pos[2]:+.3f} m",
+            (200, 200, 255),
+        ))
+        lines.append((
+            f"Goal:    x={self.goal_pos[0]:+.3f}  y={self.goal_pos[1]:+.3f}  z={self.goal_pos[2]:+.3f} m",
+            (200, 255, 200),
+        ))
+        lines.append(("", (255, 255, 255)))  # spacer
+
+        # Joint statistics
+        lines.append(("Joint        Angle (deg)  Vel (deg/s)", (180, 180, 180)))
+        lines.append(("-" * 40, (100, 100, 100)))
+        for j in range(len(self.robot_joints)):
+            jname = self.robot_joints[j]
+            # Truncate long joint names for display
+            short = jname[-12:] if len(jname) > 12 else jname
+            lines.append((
+                f"{short:<12s} {joint_pos_deg[j]:+8.2f}     {joint_vel_deg[j]:+8.2f}",
+                (220, 220, 220),
+            ))
+        lines.append(("", (255, 255, 255)))  # spacer
+
+        # Episode stats
+        lines.append((f"Goals reached:    {self._goals_reached}", (180, 220, 255)))
+        lines.append((f"Goals held:       {self._goals_held}", (180, 220, 255)))
+        lines.append((f"Goals resampled:  {self._goals_resampled}", (180, 220, 255)))
+        lines.append((f"Self-collisions:  {self._self_collision_count}", (180, 220, 255)))
+
+        # --- Render text onto frame with PIL ---
+        img = Image.fromarray(frame)
+        draw = ImageDraw.Draw(img, "RGBA")
+
+        # Use a small monospaced-like font; fall back to default if needed.
+        try:
+            font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf", 13)
+        except (IOError, OSError):
+            try:
+                font = ImageFont.truetype("/usr/share/fonts/TTF/DejaVuSansMono.ttf", 13)
+            except (IOError, OSError):
+                font = ImageFont.load_default()
+
+        line_h = 16
+        pad = 6
+        panel_w = 340
+        panel_h = pad * 2 + line_h * len(lines)
+        panel_x = w - panel_w - 8
+        panel_y = 8
+
+        # Semi-transparent dark background
+        draw.rectangle(
+            [panel_x, panel_y, panel_x + panel_w, panel_y + panel_h],
+            fill=(0, 0, 0, 160),
+        )
+
+        y = panel_y + pad
+        for text, color in lines:
+            if text:
+                draw.text((panel_x + pad, y), text, fill=(*color, 255), font=font)
+            y += line_h
+
+        return np.array(img)
+
     def render(self, mode: str = "human") -> Optional[np.ndarray]:
-        """Render the scene."""
+        """Render the scene with an optional metrics overlay."""
         if mode == "rgb_array":
             self._renderer_top.update_scene(self.data, camera="top")
             frame_top = self._renderer_top.render()
@@ -846,7 +1048,8 @@ class URReachEnvBase:
             frame_side = self._renderer_side.render()
             self._renderer_ee.update_scene(self.data, camera="ee_cam")
             frame_ee = self._renderer_ee.render()
-            return np.concatenate([frame_top, frame_side, frame_ee], axis=1)
+            frame = np.concatenate([frame_top, frame_side, frame_ee], axis=1)
+            return self._draw_metrics_overlay(frame)
         return None
 
     def close(self) -> None:

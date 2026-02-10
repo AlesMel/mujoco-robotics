@@ -171,8 +171,8 @@ def test_joint_pos_isaac_reward_success_termination_flag_gym() -> None:
     env.close()
 
 
-def test_joint_pos_isaac_reward_defaults_resample_within_episode() -> None:
-    """Built-in defaults should resample commands within a 12s episode."""
+def test_joint_pos_isaac_reward_defaults_do_not_resample_within_episode() -> None:
+    """Built-in defaults should keep one goal for the full 12s episode."""
     env = ReachGymnasium(
         robot="ur3e",
         control_variant="joint_pos_isaac_reward",
@@ -192,7 +192,7 @@ def test_joint_pos_isaac_reward_defaults_resample_within_episode() -> None:
 
     assert terminated is False
     assert truncated is True
-    assert any_resample is True
+    assert any_resample is False
     env.close()
 
 

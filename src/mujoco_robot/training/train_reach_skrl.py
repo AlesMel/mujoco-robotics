@@ -159,6 +159,10 @@ def train_reach_skrl_ppo(
     action_mode: str | None = None,
     reach_threshold: float = 0.03,
     ori_threshold: float = 0.25,
+    success_hold_steps: int = 10,
+    success_bonus: float = 0.25,
+    stay_reward_weight: float = 0.05,
+    resample_on_success: bool = False,
     seed: int = 42,
     device: str = "cuda:0",
 ) -> Any:
@@ -170,6 +174,10 @@ def train_reach_skrl_ppo(
         control_variant=control_variant,
         reach_threshold=reach_threshold,
         ori_threshold=ori_threshold,
+        success_hold_steps=success_hold_steps,
+        success_bonus=success_bonus,
+        stay_reward_weight=stay_reward_weight,
+        resample_on_success=resample_on_success,
     )
 
     print(f"\n{'='*60}")
@@ -178,6 +186,10 @@ def train_reach_skrl_ppo(
     print(f"  Control variant:  {control_variant}")
     print(f"  Reach threshold:  {reach_threshold:.3f} m")
     print(f"  Ori threshold:    {ori_threshold:.2f} rad")
+    print(f"  Hold steps:       {success_hold_steps}")
+    print(f"  Success bonus:    {success_bonus:.3f}")
+    print(f"  Stay reward w:    {stay_reward_weight:.3f} /s")
+    print(f"  Resample success: {resample_on_success}")
     print(f"  Num envs:         {n_envs}")
     print(f"  Timesteps:        {total_timesteps:,}")
     print(f"  Device:           {device}")
@@ -229,6 +241,10 @@ def main() -> None:
     )
     p.add_argument("--reach-threshold", type=float, default=0.03)
     p.add_argument("--ori-threshold", type=float, default=0.25)
+    p.add_argument("--success-hold-steps", type=int, default=10)
+    p.add_argument("--success-bonus", type=float, default=0.25)
+    p.add_argument("--stay-reward-weight", type=float, default=0.05)
+    p.add_argument("--resample-on-success", action=argparse.BooleanOptionalAction, default=False)
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--device", type=str, default="cuda:0")
     args = p.parse_args()
@@ -243,6 +259,10 @@ def main() -> None:
         action_mode=args.action_mode,
         reach_threshold=args.reach_threshold,
         ori_threshold=args.ori_threshold,
+        success_hold_steps=args.success_hold_steps,
+        success_bonus=args.success_bonus,
+        stay_reward_weight=args.stay_reward_weight,
+        resample_on_success=args.resample_on_success,
         seed=args.seed,
         device=args.device,
     )

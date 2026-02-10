@@ -24,6 +24,15 @@ def position_error_tanh_std_01(env, ctx: dict[str, float]) -> float:
     return position_error_tanh(env, ctx, std=0.1)
 
 
+def position_error_tanh_with_std(std: float):
+    """Return a position tanh reward function with custom std."""
+
+    def _fn(env, ctx: dict[str, float]) -> float:
+        return position_error_tanh(env, ctx, std=float(std))
+
+    return _fn
+
+
 def orientation_error_tanh_std_02(env, ctx: dict[str, float]) -> float:
     return orientation_error_tanh(env, ctx, std=0.2)
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict
 
-from mujoco_robot.envs.reach.mdp import ReachMDPCfg
+from mujoco_robot.envs.reach.mdp import ReachMDPCfg, ReachRewardCfg
 
 
 @dataclass
@@ -18,4 +18,6 @@ class ReachTaskConfig:
     render_mode: str | None = None
     # Optional manager-based MDP override (actions/observations/rewards/terminations).
     mdp_cfg: ReachMDPCfg | None = None
+    # Optional high-level reward config used when default MDP rewards are built.
+    reward_cfg: ReachRewardCfg | None = None
     env_kwargs: Dict[str, Any] = field(default_factory=dict)

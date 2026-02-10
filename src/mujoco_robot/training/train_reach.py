@@ -34,6 +34,10 @@ def train_reach_ppo(
     action_mode: str | None = None,
     reach_threshold: float = 0.03,
     ori_threshold: float = 0.25,
+    success_hold_steps: int = 10,
+    success_bonus: float = 0.25,
+    stay_reward_weight: float = 0.05,
+    resample_on_success: bool = False,
     progress_bar: bool = True,
     sb3_verbose: int = 0,
     callback_new_best_only: bool = True,
@@ -65,6 +69,14 @@ def train_reach_ppo(
         Position distance (m) within which the EE counts as "at goal".
     ori_threshold : float
         Orientation error (rad) within which orientation counts as matched.
+    success_hold_steps : int
+        Consecutive success steps required for hold-success shaping.
+    success_bonus : float
+        One-time bonus added when hold-success is first achieved.
+    stay_reward_weight : float
+        Per-second reward weight while hold-success is maintained.
+    resample_on_success : bool
+        Whether to resample goal immediately after first hold-success.
 
     Returns
     -------
@@ -89,6 +101,10 @@ def train_reach_ppo(
         control_variant=control_variant,
         reach_threshold=reach_threshold,
         ori_threshold=ori_threshold,
+        success_hold_steps=success_hold_steps,
+        success_bonus=success_bonus,
+        stay_reward_weight=stay_reward_weight,
+        resample_on_success=resample_on_success,
     )
 
     print(f"\n{'='*50}")
@@ -97,9 +113,13 @@ def train_reach_ppo(
     print(f"  Control variant:  {control_variant}")
     print(f"  Reach threshold:  {reach_threshold:.3f} m")
     print(f"  Ori threshold:    {ori_threshold:.2f} rad")
+    print(f"  Hold steps:       {success_hold_steps}")
+    print(f"  Success bonus:    {success_bonus:.3f}")
+    print(f"  Stay reward w:    {stay_reward_weight:.3f} /s")
+    print(f"  Resample success: {resample_on_success}")
     print(f"  Progress bar:     {progress_bar}")
     if control_variant == "joint_pos_isaac_reward":
-        print("  Episode setup:    built-in Isaac-style defaults (12s, 4s command)")
+        print("  Episode setup:    built-in defaults (12s, no in-episode goal resample)")
     print(f"  Total timesteps:  {total_timesteps:,}")
     print(f"{'='*50}\n")
 
@@ -196,6 +216,14 @@ def main():
                     help="Position tolerance for goal reached (metres, default: 0.03)")
     p.add_argument("--ori-threshold", type=float, default=0.25,
                     help="Orientation tolerance for goal reached (radians, default: 0.25)")
+    p.add_argument("--success-hold-steps", type=int, default=10,
+                    help="Consecutive success steps required to trigger hold-success.")
+    p.add_argument("--success-bonus", type=float, default=0.25,
+                    help="One-time reward added when hold-success is first achieved.")
+    p.add_argument("--stay-reward-weight", type=float, default=0.05,
+                    help="Per-second reward weight while hold-success is maintained.")
+    p.add_argument("--resample-on-success", action=argparse.BooleanOptionalAction, default=False,
+                    help="Resample goal immediately after first hold-success for current goal.")
     p.add_argument("--save-video", action=argparse.BooleanOptionalAction, default=True)
     p.add_argument("--save-video-every", type=int, default=50_000)
     p.add_argument("--progress-bar", action=argparse.BooleanOptionalAction, default=True,
@@ -220,6 +248,10 @@ def main():
         action_mode=args.action_mode,
         reach_threshold=args.reach_threshold,
         ori_threshold=args.ori_threshold,
+        success_hold_steps=args.success_hold_steps,
+        success_bonus=args.success_bonus,
+        stay_reward_weight=args.stay_reward_weight,
+        resample_on_success=args.resample_on_success,
         progress_bar=args.progress_bar,
         sb3_verbose=args.sb3_verbose,
         callback_new_best_only=args.callback_new_best_only,
