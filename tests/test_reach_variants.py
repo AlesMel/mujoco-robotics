@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import gymnasium
+import mujoco
 import numpy as np
 import pytest
 
@@ -170,8 +171,8 @@ def test_joint_pos_isaac_reward_success_termination_flag_gym() -> None:
     env.close()
 
 
-def test_joint_pos_isaac_reward_defaults_do_not_resample_within_episode() -> None:
-    """Built-in defaults should keep one goal per ~3s episode."""
+def test_joint_pos_isaac_reward_defaults_resample_within_episode() -> None:
+    """Built-in defaults should resample commands within a 12s episode."""
     env = ReachGymnasium(
         robot="ur3e",
         control_variant="joint_pos_isaac_reward",
@@ -179,7 +180,7 @@ def test_joint_pos_isaac_reward_defaults_do_not_resample_within_episode() -> Non
     env.reset(seed=0)
 
     step_dt = env.base.model.opt.timestep * env.base.n_substeps
-    assert env.base.time_limit == int(round(3.0 / step_dt))
+    assert env.base.time_limit == int(round(12.0 / step_dt))
 
     zero = np.zeros(env.action_space.shape, dtype=np.float32)
     any_resample = False
@@ -191,7 +192,7 @@ def test_joint_pos_isaac_reward_defaults_do_not_resample_within_episode() -> Non
 
     assert terminated is False
     assert truncated is True
-    assert any_resample is False
+    assert any_resample is True
     env.close()
 
 
@@ -209,5 +210,35 @@ def test_joint_pos_isaac_reward_control_defaults_match_isaac_style() -> None:
     assert env.joint_action_scale == pytest.approx(0.5)
     assert env.hold_eps == pytest.approx(0.0)
     assert env._ema_alpha == pytest.approx(1.0)
+
+    env.close()
+
+
+def test_reach_goal_sampling_respects_table_boundaries() -> None:
+    """Sampled goals should stay within the table footprint and z clearance."""
+    env = URReachEnv(
+        robot="ur3e",
+        control_variant="ik_rel",
+        time_limit=0,
+        randomize_init=False,
+        seed=0,
+    )
+
+    table_gid = mujoco.mj_name2id(env.model, mujoco.mjtObj.mjOBJ_GEOM, "table")
+    assert table_gid >= 0
+    table_pos = env.model.geom_pos[table_gid].copy()
+    table_size = env.model.geom_size[table_gid].copy()
+    x_lo = table_pos[0] - table_size[0] + env._table_spawn_margin_xy
+    x_hi = table_pos[0] + table_size[0] - env._table_spawn_margin_xy
+    y_lo = table_pos[1] - table_size[1] + env._table_spawn_margin_xy
+    y_hi = table_pos[1] + table_size[1] - env._table_spawn_margin_xy
+    z_min = table_pos[2] + table_size[2] + env._table_goal_z_margin
+
+    for seed in range(8):
+        env.reset(seed=seed)
+        gx, gy, gz = env.goal_pos
+        assert x_lo <= gx <= x_hi
+        assert y_lo <= gy <= y_hi
+        assert gz >= z_min
 
     env.close()

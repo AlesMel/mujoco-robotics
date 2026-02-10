@@ -7,6 +7,7 @@ import numpy as np
 
 from mujoco_robot.envs.reach.mdp.terms import (
     ActionTermCfg,
+    CommandTermCfg,
     ObservationTermCfg,
     RewardTermCfg,
     TerminationTermCfg,
@@ -23,6 +24,68 @@ class ActionManager:
     def compute_joint_targets(self, action: np.ndarray) -> np.ndarray:
         out = self._term.fn(self._env, action)
         return np.asarray(out, dtype=float).flatten()
+
+
+class CommandManager:
+    """Manage pose command sampling and time-based resampling."""
+
+    def __init__(self, env: Any, term: CommandTermCfg):
+        self._env = env
+        self._term = term
+        self._elapsed_s = 0.0
+        self._target_s = 0.0
+        self._pose_command = np.array([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+        self._validate_time_range()
+
+    def _validate_time_range(self) -> None:
+        lo_s, hi_s = self._term.resampling_time_range_s
+        lo_s = float(lo_s)
+        hi_s = float(hi_s)
+        if lo_s <= 0.0 or hi_s <= 0.0 or lo_s > hi_s:
+            raise ValueError(
+                "command resampling_time_range_s must be positive and ordered "
+                f"(min <= max), got {self._term.resampling_time_range_s}"
+            )
+
+    def _sample_interval_s(self) -> float:
+        lo_s, hi_s = self._term.resampling_time_range_s
+        if hi_s <= lo_s:
+            return float(lo_s)
+        return float(self._env._rng.uniform(lo_s, hi_s))
+
+    def _sample_pose_command(self) -> np.ndarray:
+        out = np.asarray(self._term.fn(self._env), dtype=np.float32).reshape(-1)
+        if out.shape[0] != 7:
+            raise ValueError(
+                f"Command term '{self._term.name}' must return shape (7,), got {tuple(out.shape)}"
+            )
+        return out
+
+    def reset(self) -> None:
+        self._elapsed_s = 0.0
+        self._target_s = self._sample_interval_s()
+        self._pose_command = self._sample_pose_command()
+
+    def step(self, step_dt: float) -> bool:
+        self._elapsed_s += float(step_dt)
+        if self._elapsed_s < self._target_s:
+            return False
+        self._elapsed_s = 0.0
+        self._target_s = self._sample_interval_s()
+        self._pose_command = self._sample_pose_command()
+        return True
+
+    @property
+    def elapsed_s(self) -> float:
+        return float(self._elapsed_s)
+
+    @property
+    def target_s(self) -> float:
+        return float(self._target_s)
+
+    @property
+    def pose_command(self) -> np.ndarray:
+        return self._pose_command.astype(np.float32).copy()
 
 
 class ObservationManager:
@@ -67,13 +130,14 @@ class RewardManager:
         total = 0.0
         raw_terms: dict[str, float] = {}
         weighted_terms: dict[str, float] = {}
+        step_dt = float(self._env.model.opt.timestep * self._env.n_substeps)
 
         for term in self._terms:
             if not term.enabled:
                 continue
             raw = float(term.fn(self._env, ctx))
             weight = term.weight(self._env) if callable(term.weight) else float(term.weight)
-            weighted = weight * raw
+            weighted = weight * raw * step_dt
             total += weighted
             raw_terms[term.name] = raw
             weighted_terms[term.name] = float(weighted)

@@ -2,6 +2,7 @@
 
 from mujoco_robot.envs.reach.mdp.terms import (
     ActionTermCfg,
+    CommandTermCfg,
     ObservationTermCfg,
     ReachMDPCfg,
     RewardTermCfg,
@@ -9,11 +10,13 @@ from mujoco_robot.envs.reach.mdp.terms import (
 )
 from mujoco_robot.envs.reach.mdp.managers import (
     ActionManager,
+    CommandManager,
     ObservationManager,
     RewardManager,
     TerminationManager,
 )
 from mujoco_robot.envs.reach.mdp.config import (
+    default_command_term,
     default_observation_terms,
     default_reward_terms,
     default_success_term,
@@ -21,18 +24,21 @@ from mujoco_robot.envs.reach.mdp.config import (
     default_timeout_term,
     make_default_reach_mdp_cfg,
 )
-from . import actions, observations, rewards, terminations
+from . import actions, commands, observations, rewards, terminations
 
 __all__ = [
     "ActionTermCfg",
+    "CommandTermCfg",
     "ObservationTermCfg",
     "RewardTermCfg",
     "TerminationTermCfg",
     "ReachMDPCfg",
     "ActionManager",
+    "CommandManager",
     "ObservationManager",
     "RewardManager",
     "TerminationManager",
+    "default_command_term",
     "default_observation_terms",
     "default_reward_terms",
     "default_success_term",
@@ -40,6 +46,7 @@ __all__ = [
     "default_timeout_term",
     "make_default_reach_mdp_cfg",
     "actions",
+    "commands",
     "observations",
     "rewards",
     "terminations",

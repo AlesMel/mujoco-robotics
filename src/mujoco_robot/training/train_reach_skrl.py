@@ -38,7 +38,7 @@ def _resolve_control_variant(
             )
         return mapped
 
-    resolved = control_variant or "joint_pos_isaac_reward"
+    resolved = control_variant or "joint_pos"
     if resolved not in REACH_VARIANTS:
         raise ValueError(
             f"Unknown control_variant '{resolved}'. "
@@ -157,8 +157,8 @@ def train_reach_skrl_ppo(
     experiment_name: str = "reach_skrl_ppo",
     control_variant: str | None = None,
     action_mode: str | None = None,
-    reach_threshold: float = 0.05,
-    ori_threshold: float = 0.35,
+    reach_threshold: float = 0.03,
+    ori_threshold: float = 0.25,
     seed: int = 42,
     device: str = "cuda:0",
 ) -> Any:
@@ -227,8 +227,8 @@ def main() -> None:
         choices=["cartesian", "joint"],
         help="Deprecated alias. cartesian->ik_rel, joint->joint_pos.",
     )
-    p.add_argument("--reach-threshold", type=float, default=0.05)
-    p.add_argument("--ori-threshold", type=float, default=0.35)
+    p.add_argument("--reach-threshold", type=float, default=0.03)
+    p.add_argument("--ori-threshold", type=float, default=0.25)
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--device", type=str, default="cuda:0")
     args = p.parse_args()

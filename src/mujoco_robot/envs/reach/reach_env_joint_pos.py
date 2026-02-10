@@ -53,10 +53,8 @@ class ReachJointPosEnv(URReachEnvBase):
             q[i] = self.data.qpos[qpos_adr]
         return q
 
-    # EMA blending factor for target smoothing.  Lower values produce
-    # smoother motion but slower response.  0.3 gives ~95 % convergence
-    # in ≈ 9 steps (≈ 0.18 s at 50 Hz control rate).
-    _ema_alpha: float = 0.3
+    # IsaacLab JointPositionAction behavior is direct target updates.
+    _ema_alpha: float = 1.0
 
     def _apply_action(self, action: np.ndarray) -> np.ndarray:
         return actions.joint_relative_targets(self, action)

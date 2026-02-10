@@ -35,7 +35,7 @@ from mujoco_robot.envs.reach import (
 def URReachEnv(
     robot: str = "ur5e",
     control_variant: Optional[str] = None,
-    action_mode: str = "cartesian",
+    action_mode: str = "joint",
     **kwargs,
 ) -> URReachEnvBase:
     """Factory that returns the correct :class:`URReachEnvBase` subclass.
@@ -47,8 +47,8 @@ def URReachEnv(
     control_variant : str | None
         Variant key from :data:`mujoco_robot.envs.reach.REACH_VARIANTS`.
     action_mode : str
-        Backward-compat alias: ``"cartesian"`` → ``"ik_rel"``,
-        ``"joint"`` → ``"joint_pos"``.
+        Backward-compat alias: ``"joint"`` → ``"joint_pos"``,
+        ``"cartesian"`` → ``"ik_rel"``.
     **kwargs
         Forwarded to the variant constructor.
 
@@ -98,7 +98,7 @@ class ReachGymnasium(ReachGymnasiumBase):
         render_mode: str | None = None,
         time_limit: int | None = None,
         control_variant: str | None = None,
-        action_mode: str = "cartesian",
+        action_mode: str = "joint",
         **env_kwargs,
     ):
         # Resolve variant
@@ -123,7 +123,7 @@ class ReachGymnasium(ReachGymnasiumBase):
         resolved_time_limit = (
             time_limit
             if time_limit is not None
-            else int(getattr(env_cls, "DEFAULT_TIME_LIMIT", 375))
+            else int(getattr(env_cls, "DEFAULT_TIME_LIMIT", 360))
         )
         super().__init__(
             robot=robot,

@@ -49,6 +49,8 @@ class BestEpisodeVideoCallback(BaseCallback):
         Training VecNormalize whose obs/ret statistics are copied for eval.
     verbose : int
         Verbosity level.
+    log_new_best_only : bool
+        If True, only print when a new best return is found.
     """
 
     def __init__(
@@ -60,6 +62,7 @@ class BestEpisodeVideoCallback(BaseCallback):
         deterministic: bool = True,
         vec_norm: VecNormalize | None = None,
         verbose: int = 1,
+        log_new_best_only: bool = True,
     ):
         super().__init__(verbose)
         self.make_eval_env = make_eval_env
@@ -68,6 +71,7 @@ class BestEpisodeVideoCallback(BaseCallback):
         self.video_dir = Path(video_dir) / env_name / run_stamp
         self.deterministic = deterministic
         self.vec_norm = vec_norm
+        self.log_new_best_only = bool(log_new_best_only)
         self.best_return = -np.inf
         self.next_record = self.save_every_timesteps
 
@@ -150,7 +154,7 @@ class BestEpisodeVideoCallback(BaseCallback):
         fname = self.video_dir / f"eval_step_{self.num_timesteps:09d}_{ts}.mp4"
         if frames:
             iio.imwrite(fname, frames, fps=fps)
-            if self.verbose:
+            if self.verbose and not self.log_new_best_only:
                 print(f"[video] saved eval episode to {fname} "
                       f"(return {ep_return:.3f}, fps={fps})")
 

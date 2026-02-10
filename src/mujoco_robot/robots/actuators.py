@@ -143,8 +143,19 @@ def configure_position_actuators(
         if low >= high:
             low, high = fallback_low, fallback_high
         model.actuator_ctrlrange[actuator_id] = np.array([low, high], dtype=float)
-        if model.actuator_gainprm[actuator_id, 0] <= 0.0:
+        if kp is not None:
+            # Keep the affine position-servo relation coherent:
+            # force ~= kp * (q_ref - q) + kv * qdot
             model.actuator_gainprm[actuator_id, 0] = servo_kp
+            if int(model.actuator_biastype[actuator_id]) == int(mujoco.mjtBias.mjBIAS_AFFINE):
+                model.actuator_biasprm[actuator_id, 1] = -servo_kp
+        elif model.actuator_gainprm[actuator_id, 0] <= 0.0:
+            model.actuator_gainprm[actuator_id, 0] = servo_kp
+            if (
+                int(model.actuator_biastype[actuator_id]) == int(mujoco.mjtBias.mjBIAS_AFFINE)
+                and abs(float(model.actuator_biasprm[actuator_id, 1])) < 1e-12
+            ):
+                model.actuator_biasprm[actuator_id, 1] = -servo_kp
 
 
 __all__ = [

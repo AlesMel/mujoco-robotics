@@ -245,6 +245,7 @@ The reach task provides multiple control variants (`ik_rel`, `ik_abs`,
 `joint_pos`, `joint_pos_isaac_reward`) and now uses a manager-style MDP
 configuration so action/observation/reward/termination terms can be overridden
 without editing the environment core.
+For parameter tuning details, see `docs/README_reach_task_parameters.md`.
 
 | UR5e | UR3e |
 |------|------|

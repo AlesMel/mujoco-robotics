@@ -27,9 +27,25 @@ def main():
         help="Robot model for reach task (default: ur3e).",
     )
     p.add_argument(
-        "--control-variant", type=str, default="ik_rel",
-        choices=["ik_rel", "ik_abs", "joint_pos"],
-        help="Reach control variant (default: ik_rel).",
+        "--control-variant", type=str, default="joint_pos",
+        choices=["ik_rel", "ik_abs", "joint_pos", "joint_pos_isaac_reward"],
+        help="Reach control variant (default: joint_pos).",
+    )
+    p.add_argument(
+        "--reach-threshold", type=float, default=0.03,
+        help="Reach success position threshold in metres (default: 0.03).",
+    )
+    p.add_argument(
+        "--ori-threshold", type=float, default=0.25,
+        help="Reach success orientation threshold in radians (default: 0.25).",
+    )
+    p.add_argument(
+        "--progress-bar", action=argparse.BooleanOptionalAction, default=True,
+        help="Use Stable-Baselines3 progress bar for reach training.",
+    )
+    p.add_argument(
+        "--sb3-verbose", type=int, default=0, choices=[0, 1, 2],
+        help="Stable-Baselines3 verbosity for reach training (default: 0).",
     )
     p.add_argument("--total-timesteps", type=int, default=500_000)
     p.add_argument("--n-envs", type=int, default=8)
@@ -47,6 +63,10 @@ def main():
             n_envs=args.n_envs,
             save_video=args.save_video,
             save_video_every=args.save_video_every,
+            reach_threshold=args.reach_threshold,
+            ori_threshold=args.ori_threshold,
+            progress_bar=args.progress_bar,
+            sb3_verbose=args.sb3_verbose,
         )
     elif args.task == "slot_sorter":
         from mujoco_robot.training.train_slot_sorter import train_slot_sorter_ppo

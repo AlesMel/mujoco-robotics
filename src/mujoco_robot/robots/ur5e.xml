@@ -92,7 +92,16 @@
   <worldbody>
     <light pos="2 2 4" dir="-1 -1 -2"/>
     <geom name="table" type="box" pos="0 0 0.72" size="0.6 0.6 0.02"
-          material="tablemat" rgba="0.9 0.9 0.9 1"/>
+          material="tablemat" rgba="0.84 0.78 0.68 1"/>
+    <!-- Legs to make the table visually closer to Isaac Lab's table prop. -->
+    <geom name="table_leg_fl" type="box" pos="0.52 0.52 0.36" size="0.03 0.03 0.36"
+          rgba="0.35 0.35 0.35 1" friction="1 0.1 0.1"/>
+    <geom name="table_leg_fr" type="box" pos="0.52 -0.52 0.36" size="0.03 0.03 0.36"
+          rgba="0.35 0.35 0.35 1" friction="1 0.1 0.1"/>
+    <geom name="table_leg_rl" type="box" pos="-0.52 0.52 0.36" size="0.03 0.03 0.36"
+          rgba="0.35 0.35 0.35 1" friction="1 0.1 0.1"/>
+    <geom name="table_leg_rr" type="box" pos="-0.52 -0.52 0.36" size="0.03 0.03 0.36"
+          rgba="0.35 0.35 0.35 1" friction="1 0.1 0.1"/>
     <geom name="floor" type="plane" pos="0 0 0" size="4 4 0.1"
           rgba="0.9 0.9 0.9 1" friction="1 0.1 0.1"/>
     <camera name="top" pos="0.1 -0.3 2.5" xyaxes="1 0 0 0 1 0" mode="fixed"/>

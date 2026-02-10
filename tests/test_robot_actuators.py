@@ -64,3 +64,5 @@ def test_resolve_and_configure_position_actuators(robot_name: str) -> None:
         )
         np.testing.assert_allclose(model.actuator_ctrlrange[act_id], expected)
         assert model.actuator_gainprm[act_id, 0] == pytest.approx(350.0)
+        if int(model.actuator_biastype[act_id]) == int(mujoco.mjtBias.mjBIAS_AFFINE):
+            assert model.actuator_biasprm[act_id, 1] == pytest.approx(-350.0)

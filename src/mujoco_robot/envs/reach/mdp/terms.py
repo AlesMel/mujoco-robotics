@@ -8,6 +8,7 @@ import numpy as np
 
 
 ActionFn = Callable[[Any, np.ndarray], np.ndarray]
+CommandFn = Callable[[Any], np.ndarray]
 ObservationFn = Callable[[Any], np.ndarray]
 RewardFn = Callable[[Any, Dict[str, float]], float]
 TerminationFn = Callable[[Any, Dict[str, float]], bool]
@@ -20,6 +21,15 @@ class ActionTermCfg:
 
     name: str
     fn: ActionFn
+
+
+@dataclass(frozen=True)
+class CommandTermCfg:
+    """Configuration for the command generation term."""
+
+    name: str
+    fn: CommandFn
+    resampling_time_range_s: tuple[float, float] = (4.0, 4.0)
 
 
 @dataclass(frozen=True)
@@ -53,6 +63,7 @@ class ReachMDPCfg:
     """Manager-based MDP configuration for reach environments."""
 
     action_term: ActionTermCfg | None = None
+    command_term: CommandTermCfg | None = None
     observation_terms: tuple[ObservationTermCfg, ...] = field(default_factory=tuple)
     reward_terms: tuple[RewardTermCfg, ...] = field(default_factory=tuple)
     success_term: TerminationTermCfg | None = None

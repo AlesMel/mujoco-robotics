@@ -30,10 +30,13 @@ def train_reach_ppo(
     log_name: str = "reach_ppo",
     save_video: bool = True,
     save_video_every: int = 50_000,
-    control_variant: str = "ik_rel",
+    control_variant: str = "joint_pos",
     action_mode: str | None = None,
-    reach_threshold: float = 0.05,
-    ori_threshold: float = 0.35,
+    reach_threshold: float = 0.03,
+    ori_threshold: float = 0.25,
+    progress_bar: bool = True,
+    sb3_verbose: int = 0,
+    callback_new_best_only: bool = True,
 ):
     """Quick-start PPO training on the reach task.
 
@@ -75,7 +78,7 @@ def train_reach_ppo(
                 f"action_mode must be one of {tuple(alias)}, got '{action_mode}'"
             )
         mapped_variant = alias[action_mode]
-        if control_variant != "ik_rel" and control_variant != mapped_variant:
+        if control_variant != "joint_pos" and control_variant != mapped_variant:
             raise ValueError(
                 "Conflicting inputs: action_mode implies "
                 f"'{mapped_variant}' but control_variant is '{control_variant}'."
@@ -94,8 +97,9 @@ def train_reach_ppo(
     print(f"  Control variant:  {control_variant}")
     print(f"  Reach threshold:  {reach_threshold:.3f} m")
     print(f"  Ori threshold:    {ori_threshold:.2f} rad")
+    print(f"  Progress bar:     {progress_bar}")
     if control_variant == "joint_pos_isaac_reward":
-        print("  Episode setup:    built-in Isaac-style defaults (3s, 4s command)")
+        print("  Episode setup:    built-in Isaac-style defaults (12s, 4s command)")
     print(f"  Total timesteps:  {total_timesteps:,}")
     print(f"{'='*50}\n")
 
@@ -127,6 +131,7 @@ def train_reach_ppo(
             deterministic=True,
             vec_norm=vec_env,
             verbose=1,
+            log_new_best_only=callback_new_best_only,
         )
         callbacks.append(video_cb)
 
@@ -155,13 +160,14 @@ def train_reach_ppo(
         max_grad_norm=1.0,
         device="cuda",
         policy_kwargs=dict(net_arch=dict(pi=[128, 128], vf=[128, 128])),
-        verbose=1,
+        verbose=sb3_verbose,
         tensorboard_log=log_dir,
     )
     model.learn(
         total_timesteps=total_timesteps,
         callback=callbacks if callbacks else None,
         tb_log_name=log_name,
+        progress_bar=progress_bar,
     )
     model.save(f"ppo_reach_{robot}")
     vec_env.save(f"ppo_reach_{robot}_vecnorm.pkl")
@@ -177,7 +183,7 @@ def main():
                     choices=list(ROBOT_CONFIGS.keys()))
     p.add_argument("--total-timesteps", type=int, default=500_000)
     p.add_argument("--n-envs", type=int, default=16)
-    p.add_argument("--control-variant", type=str, default="ik_rel",
+    p.add_argument("--control-variant", type=str, default="joint_pos",
                     choices=sorted(REACH_VARIANTS.keys()),
                     help=(
                         "Control variant. Available: "
@@ -186,12 +192,22 @@ def main():
     p.add_argument("--action-mode", type=str, default=None,
                     choices=["cartesian", "joint"],
                     help="Deprecated alias. cartesian->ik_rel, joint->joint_pos.")
-    p.add_argument("--reach-threshold", type=float, default=0.05,
-                    help="Position tolerance for goal reached (metres, default: 0.05)")
-    p.add_argument("--ori-threshold", type=float, default=0.35,
-                    help="Orientation tolerance for goal reached (radians, default: 0.35)")
+    p.add_argument("--reach-threshold", type=float, default=0.03,
+                    help="Position tolerance for goal reached (metres, default: 0.03)")
+    p.add_argument("--ori-threshold", type=float, default=0.25,
+                    help="Orientation tolerance for goal reached (radians, default: 0.25)")
     p.add_argument("--save-video", action=argparse.BooleanOptionalAction, default=True)
     p.add_argument("--save-video-every", type=int, default=50_000)
+    p.add_argument("--progress-bar", action=argparse.BooleanOptionalAction, default=True,
+                    help="Use Stable-Baselines3 tqdm/rich progress bar.")
+    p.add_argument("--sb3-verbose", type=int, default=0, choices=[0, 1, 2],
+                    help="Stable-Baselines3 verbosity (0 recommended with progress bar).")
+    p.add_argument(
+        "--callback-new-best-only",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="If true, callback prints only when eval return reaches a new best.",
+    )
     args = p.parse_args()
 
     train_reach_ppo(
@@ -204,6 +220,9 @@ def main():
         action_mode=args.action_mode,
         reach_threshold=args.reach_threshold,
         ori_threshold=args.ori_threshold,
+        progress_bar=args.progress_bar,
+        sb3_verbose=args.sb3_verbose,
+        callback_new_best_only=args.callback_new_best_only,
     )
 
 

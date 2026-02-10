@@ -39,26 +39,26 @@ import gymnasium
 gymnasium.register(
     id="MuJoCoRobot/Reach-v0",
     entry_point="mujoco_robot.envs.reach_env:ReachGymnasium",
-    max_episode_steps=375,
+    max_episode_steps=360,
 )
 
 # Modular variants — each points directly to its Gymnasium class
 gymnasium.register(
     id="MuJoCoRobot/Reach-IK-Rel-v0",
     entry_point="mujoco_robot.envs.reach.reach_env_ik_rel:ReachIKRelGymnasium",
-    max_episode_steps=375,
+    max_episode_steps=360,
 )
 
 gymnasium.register(
     id="MuJoCoRobot/Reach-IK-Abs-v0",
     entry_point="mujoco_robot.envs.reach.reach_env_ik_abs:ReachIKAbsGymnasium",
-    max_episode_steps=375,
+    max_episode_steps=360,
 )
 
 gymnasium.register(
     id="MuJoCoRobot/Reach-Joint-Pos-v0",
     entry_point="mujoco_robot.envs.reach.reach_env_joint_pos:ReachJointPosGymnasium",
-    max_episode_steps=375,
+    max_episode_steps=360,
 )
 
 gymnasium.register(
@@ -67,9 +67,7 @@ gymnasium.register(
         "mujoco_robot.envs.reach.reach_env_joint_pos_isaac_reward:"
         "ReachJointPosIsaacRewardGymnasium"
     ),
-    # Isaac-inspired joint-pos reward setup uses ~3.0 s episodes by default.
-    # 3.0 s / (0.005 s * 4 substeps) = 150 control steps.
-    max_episode_steps=150,
+    max_episode_steps=360,
 )
 
 gymnasium.register(

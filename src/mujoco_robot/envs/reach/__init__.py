@@ -2,9 +2,9 @@
 
 Each control variant lives in its own module:
 
-* :mod:`.reach_env_ik_rel` — IK-Relative (default)
+* :mod:`.reach_env_joint_pos` — Joint-Position (default)
+* :mod:`.reach_env_ik_rel` — IK-Relative
 * :mod:`.reach_env_ik_abs` — IK-Absolute
-* :mod:`.reach_env_joint_pos` — Joint-Position offsets
 * :mod:`.reach_env_joint_pos_isaac_reward` — Joint-Position + Isaac reward
 
 All variants share the same base task logic from

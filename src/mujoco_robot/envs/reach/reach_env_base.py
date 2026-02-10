@@ -18,7 +18,7 @@ Isaac-Lab-inspired features:
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Dict, Iterable, Optional, Tuple
 
 import gymnasium
@@ -41,6 +41,7 @@ from mujoco_robot.core.collision import CollisionDetector
 from mujoco_robot.core.xml_builder import load_robot_xml, build_reach_xml
 from mujoco_robot.envs.reach.mdp import (
     ActionManager,
+    CommandManager,
     ReachMDPCfg,
     ObservationManager,
     RewardManager,
@@ -82,7 +83,7 @@ class ReachGymnasiumBase(gymnasium.Env):
         robot: str = "ur5e",
         seed: int | None = None,
         render_mode: str | None = None,
-        time_limit: int = 375,
+        time_limit: int = 360,
         env_cls: type | None = None,
         **env_kwargs,
     ):
@@ -163,27 +164,27 @@ class URReachEnvBase:
         ============== ===== ===================================
         → total = 25   (matches Isaac Lab reach env exactly)
 
-    Reward (7 terms):
-        ``-0.2 * dist``  +  ``0.16 * (1 − tanh(d/0.1))``  +
-        ``-0.15 * ori_err``  +  ``0.1 * (1 − tanh(ori_err/0.2))``  +
-        ``0.5 * at_goal``  +  ``-w_ar * ||Δa||²``  +  ``-w_jv * ||q̇||²``
-        with curriculum on action-rate and joint-velocity penalties.
+    Reward (Isaac Lab reach manager cfg):
+        ``-0.2 * position_error`` + ``0.1 * position_error_tanh(std=0.1)`` +
+        ``-0.1 * orientation_error`` + ``-w_ar * ||Δa||²`` + ``-w_jv * ||q̇||²``
+        where ``w_ar`` and ``w_jv`` follow the Isaac Lab curriculum schedule.
     """
 
     # Subclasses may refine these; defaults assume 6-DOF action.
     _action_dim: int = 6
+    DEFAULT_TIME_LIMIT: int = 360
 
     def __init__(
         self,
         robot: str = "ur5e",
         model_path: Optional[str] = None,
-        time_limit: int = 375,
+        time_limit: int = DEFAULT_TIME_LIMIT,
         ee_step: float = 0.06,
         ori_step: float = 0.5,
         ori_abs_max: float = np.pi,
-        joint_action_scale: float = 0.1,
-        reach_threshold: float = 0.05,
-        ori_threshold: float = 0.35,
+        joint_action_scale: float = 0.5,
+        reach_threshold: float = 0.03,
+        ori_threshold: float = 0.25,
         terminate_on_success: bool = False,
         terminate_on_collision: bool = False,
         hold_seconds: float = 2.0,  # deprecated, kept for API compatibility
@@ -194,6 +195,9 @@ class URReachEnvBase:
         joint_vel_weight: float = 0.0001,
         randomize_init: bool = True,
         init_q_range: Tuple[float, float] = (0.75, 1.25),
+        actuator_kp: float = 250.0,
+        min_joint_damping: float = 20.0,
+        min_joint_frictionloss: float = 1.0,
         render_size: Tuple[int, int] = (960, 720),
         seed: Optional[int] = None,
         mdp_cfg: ReachMDPCfg | None = None,
@@ -214,10 +218,13 @@ class URReachEnvBase:
         self.ori_abs_max = float(ori_abs_max)
         self.joint_action_scale = joint_action_scale
         self.obs_noise = obs_noise
-        self.action_rate_weight = max(action_rate_weight, 0.001)  # higher initial → less jitter
+        self.action_rate_weight = float(action_rate_weight)
         self.joint_vel_weight = joint_vel_weight
         self.randomize_init = randomize_init
         self.init_q_range = init_q_range
+        self.actuator_kp = float(actuator_kp)
+        self.min_joint_damping = float(min_joint_damping)
+        self.min_joint_frictionloss = float(min_joint_frictionloss)
         self.render_size = render_size
 
         # Isaac-style: command resampling based on elapsed wall-clock time.
@@ -227,7 +234,7 @@ class URReachEnvBase:
         self.terminate_on_collision = terminate_on_collision
         if goal_resample_interval is not None:
             # Backward compatibility for old step-count API.
-            default_step_dt = 0.005 * 4
+            default_step_dt = (1.0 / 60.0) * 2.0
             fixed_s = float(goal_resample_interval) * default_step_dt
             self.goal_resample_time_range_s = (fixed_s, fixed_s)
         else:
@@ -240,9 +247,6 @@ class URReachEnvBase:
                     f"(min <= max), got {goal_resample_time_range_s}"
                 )
             self.goal_resample_time_range_s = (lo_s, hi_s)
-        self._goal_resample_elapsed_s = 0.0
-        self._next_goal_resample_s = self.goal_resample_time_range_s[0]
-
         # Curriculum targets (Isaac Lab style)
         self._action_rate_target = 0.005
         self._joint_vel_target = 0.001
@@ -257,14 +261,18 @@ class URReachEnvBase:
         # Physics / control tuning
         self.max_joint_vel = 4.0
         self.ik_damping = 0.02
-        self.hold_eps = 0.05
-        self.n_substeps = 4
+        self.hold_eps = 0.0
+        self.n_substeps = 2
         self.settle_steps = 300
 
         # Robot-specific home pose and workspace bounds
         self.init_q = cfg.init_q.copy()
         self.goal_bounds = cfg.goal_bounds.copy()
         self.ee_bounds = cfg.ee_bounds.copy()
+        self._table_spawn_margin_xy = 0.04
+        self._table_goal_z_margin = 0.08
+        self._table_xy_bounds: np.ndarray | None = None
+        self._table_top_z: float | None = None
 
         # ---- Build MuJoCo model ----
         robot_xml = load_robot_xml(self.model_path)
@@ -274,7 +282,7 @@ class URReachEnvBase:
         self.data = mujoco.MjData(self.model)
 
         # Solver settings
-        self.model.opt.timestep = 0.005
+        self.model.opt.timestep = 1.0 / 60.0
         self.model.opt.integrator = mujoco.mjtIntegrator.mjINT_IMPLICITFAST
         self.model.opt.iterations = max(self.model.opt.iterations, 50)
         self.model.opt.gravity[:] = [0.0, 0.0, -9.81]
@@ -300,6 +308,7 @@ class URReachEnvBase:
         self.goal_geom = mujoco.mj_name2id(
             self.model, mujoco.mjtObj.mjOBJ_GEOM, "goal_cube"
         )
+        self._refresh_table_bounds()
 
         actuator_handles = resolve_robot_actuators(self.model, robot)
         self.robot_joints = list(actuator_handles.joint_names)
@@ -308,17 +317,15 @@ class URReachEnvBase:
         self._robot_joint_ids = list(actuator_handles.joint_ids)
         self._robot_qpos_ids = list(actuator_handles.qpos_ids)
 
-        # Passive damping must be high enough to prevent ringing.
-        # With position-servo gain ~= 400, critical damping requires
-        # b ~= 2*sqrt(kp*I) ~= 40 for typical joint inertia ~= 1 kg*m^2.
-        # 10.0 -> damping ratio ~= 0.25 (slightly underdamped, no visible
-        # oscillation). Friction-loss adds Coulomb stiction that kills
-        # residual jitter near equilibrium.
+        # Tune position-servo stiffness and passive damping for stability.
+        # In MuJoCo, very stiff servo gains can ring around small targets,
+        # so we use a softer kp and stronger passive damping by default.
         configure_position_actuators(
             self.model,
             actuator_handles,
-            min_damping=10.0,
-            min_frictionloss=0.5,
+            min_damping=self.min_joint_damping,
+            min_frictionloss=self.min_joint_frictionloss,
+            kp=self.actuator_kp,
         )
 
         # --- Self-collision detection ---
@@ -345,7 +352,13 @@ class URReachEnvBase:
 
         # Manager-based MDP composition (IsaacLab-style).
         self._mdp_cfg = self._resolve_mdp_cfg(mdp_cfg)
+        if self._mdp_cfg.command_term.resampling_time_range_s != self.goal_resample_time_range_s:
+            self._mdp_cfg.command_term = replace(
+                self._mdp_cfg.command_term,
+                resampling_time_range_s=self.goal_resample_time_range_s,
+            )
         self._action_manager = ActionManager(self, self._mdp_cfg.action_term)
+        self._command_manager = CommandManager(self, self._mdp_cfg.command_term)
         self._observation_manager = ObservationManager(
             self, self._mdp_cfg.observation_terms
         )
@@ -367,6 +380,8 @@ class URReachEnvBase:
         defaults = self._build_default_mdp_cfg()
         if cfg.action_term is None:
             cfg.action_term = defaults.action_term
+        if cfg.command_term is None:
+            cfg.command_term = defaults.command_term
         if not cfg.observation_terms:
             cfg.observation_terms = defaults.observation_terms
         if not cfg.reward_terms:
@@ -405,8 +420,6 @@ class URReachEnvBase:
         self.step_id = 0
         self._goals_reached = 0
         self._self_collision_count = 0
-        self._goal_resample_elapsed_s = 0.0
-        self._next_goal_resample_s = self._sample_goal_resample_time_s()
         self._last_targets = self.init_q.copy()
         self._last_action = np.zeros(self.action_dim, dtype=np.float32)
         self._prev_action = np.zeros(self.action_dim, dtype=np.float32)
@@ -440,10 +453,9 @@ class URReachEnvBase:
         # Store the home orientation for orientation curriculum
         self._home_quat = self._ee_quat()
 
-        # Sample goal
-        self.goal_pos = self._sample_goal()
-        self.goal_quat = self._sample_goal_quat()
-        self._place_goal_marker(self.goal_pos, self.goal_quat)
+        # Sample initial command through command manager.
+        self._command_manager.reset()
+        self._resample_goal()
 
         for _ in range(self.settle_steps):
             mujoco.mj_step(self.model, self.data)
@@ -453,6 +465,62 @@ class URReachEnvBase:
         return self._observe()
 
     # -------------------------------------------------------------- Goal sampling
+    def _refresh_table_bounds(self) -> None:
+        """Cache table XY bounds / top Z if a table geom is present."""
+        self._table_xy_bounds = None
+        self._table_top_z = None
+
+        table_gid = mujoco.mj_name2id(
+            self.model, mujoco.mjtObj.mjOBJ_GEOM, "table"
+        )
+        if table_gid < 0:
+            return
+        if int(self.model.geom_type[table_gid]) != int(mujoco.mjtGeom.mjGEOM_BOX):
+            return
+
+        pos = self.model.geom_pos[table_gid]
+        size = self.model.geom_size[table_gid]
+        self._table_xy_bounds = np.array([
+            [pos[0] - size[0], pos[0] + size[0]],
+            [pos[1] - size[1], pos[1] + size[1]],
+        ], dtype=float)
+        self._table_top_z = float(pos[2] + size[2])
+
+    def _goal_sampling_bounds(self) -> tuple[tuple[float, float], tuple[float, float], tuple[float, float]]:
+        """Goal XYZ sampling bounds, clipped to table footprint when available."""
+        x_lo, x_hi = float(self.goal_bounds[0, 0]), float(self.goal_bounds[0, 1])
+        y_lo, y_hi = float(self.goal_bounds[1, 0]), float(self.goal_bounds[1, 1])
+        z_lo, z_hi = float(self.goal_bounds[2, 0]), float(self.goal_bounds[2, 1])
+
+        if self._table_xy_bounds is not None:
+            x_lo = max(x_lo, float(self._table_xy_bounds[0, 0]) + self._table_spawn_margin_xy)
+            x_hi = min(x_hi, float(self._table_xy_bounds[0, 1]) - self._table_spawn_margin_xy)
+            y_lo = max(y_lo, float(self._table_xy_bounds[1, 0]) + self._table_spawn_margin_xy)
+            y_hi = min(y_hi, float(self._table_xy_bounds[1, 1]) - self._table_spawn_margin_xy)
+        if self._table_top_z is not None:
+            z_lo = max(z_lo, self._table_top_z + self._table_goal_z_margin)
+
+        # Keep ranges valid even for unusual custom robot/table setups.
+        if x_lo >= x_hi:
+            if self._table_xy_bounds is not None:
+                x_lo = float(self._table_xy_bounds[0, 0]) + 0.01
+                x_hi = float(self._table_xy_bounds[0, 1]) - 0.01
+            if x_lo >= x_hi:
+                x_lo, x_hi = float(self.goal_bounds[0, 0]), float(self.goal_bounds[0, 1])
+        if y_lo >= y_hi:
+            if self._table_xy_bounds is not None:
+                y_lo = float(self._table_xy_bounds[1, 0]) + 0.01
+                y_hi = float(self._table_xy_bounds[1, 1]) - 0.01
+            if y_lo >= y_hi:
+                y_lo, y_hi = float(self.goal_bounds[1, 0]), float(self.goal_bounds[1, 1])
+        if z_lo >= z_hi:
+            z_lo, z_hi = float(self.goal_bounds[2, 0]), float(self.goal_bounds[2, 1])
+            if z_lo >= z_hi:
+                z_mid = 0.5 * (z_lo + z_hi)
+                z_lo, z_hi = z_mid - 0.01, z_mid + 0.01
+
+        return (x_lo, x_hi), (y_lo, y_hi), (z_lo, z_hi)
+
     def _sample_goal(self) -> np.ndarray:
         """Sample a random reachable goal position."""
         cfg = get_robot_config(self.robot)
@@ -460,12 +528,15 @@ class URReachEnvBase:
         min_base, max_base = cfg.goal_distance
         min_height = cfg.goal_min_height
         min_ee = cfg.goal_min_ee_dist
+        (x_lo, x_hi), (y_lo, y_hi), (z_lo, z_hi) = self._goal_sampling_bounds()
+        if self._table_top_z is not None:
+            min_height = max(min_height, self._table_top_z + self._table_goal_z_margin)
 
         for _ in range(500):
             goal = np.array([
-                self._rng.uniform(self.goal_bounds[0, 0], self.goal_bounds[0, 1]),
-                self._rng.uniform(self.goal_bounds[1, 0], self.goal_bounds[1, 1]),
-                self._rng.uniform(self.goal_bounds[2, 0], self.goal_bounds[2, 1]),
+                self._rng.uniform(x_lo, x_hi),
+                self._rng.uniform(y_lo, y_hi),
+                self._rng.uniform(z_lo, z_hi),
             ])
             if goal[2] < min_height:
                 continue
@@ -475,7 +546,11 @@ class URReachEnvBase:
             if np.linalg.norm(goal - ee_pos) < min_ee:
                 continue
             return goal
-        return self._BASE_POS + np.array([0.25, 0.0, 0.30])
+        fallback = self._BASE_POS + np.array([0.25, 0.0, 0.30])
+        fallback[0] = float(np.clip(fallback[0], x_lo, x_hi))
+        fallback[1] = float(np.clip(fallback[1], y_lo, y_hi))
+        fallback[2] = float(np.clip(fallback[2], z_lo, z_hi))
+        return fallback
 
     def _sample_goal_quat(self) -> np.ndarray:
         """Sample a random goal orientation with curriculum."""
@@ -624,27 +699,18 @@ class URReachEnvBase:
         return base + (target - base) * progress
 
     def _resample_goal(self) -> None:
-        """Sample a fresh goal and update the marker (mid-episode)."""
-        self.goal_pos = self._sample_goal()
-        self.goal_quat = self._sample_goal_quat()
+        """Apply the currently sampled command pose as the active goal."""
+        pose_command = self._command_manager.pose_command
+        self.goal_pos = pose_command[:3].astype(float)
+        self.goal_quat = quat_unique(pose_command[3:7].astype(float))
         self._place_goal_marker(self.goal_pos, self.goal_quat)
-
-    def _sample_goal_resample_time_s(self) -> float:
-        """Draw next command duration from ``goal_resample_time_range_s``."""
-        lo_s, hi_s = self.goal_resample_time_range_s
-        if hi_s <= lo_s:
-            return lo_s
-        return float(self._rng.uniform(lo_s, hi_s))
 
     def _maybe_resample_goal(self) -> bool:
         """Advance command timer and resample when the sampled duration elapses."""
         step_dt = self.model.opt.timestep * self.n_substeps
-        self._goal_resample_elapsed_s += step_dt
-        if self._goal_resample_elapsed_s < self._next_goal_resample_s:
+        if not self._command_manager.step(step_dt):
             return False
 
-        self._goal_resample_elapsed_s = 0.0
-        self._next_goal_resample_s = self._sample_goal_resample_time_s()
         self._goals_reached += 1
         self._resample_goal()
         return True
@@ -666,7 +732,7 @@ class URReachEnvBase:
         )
 
     def _compute_reward(self) -> Tuple[float, bool, Dict]:
-        """Dense reward (7 terms), with Isaac-style time-based goal resampling."""
+        """Compute reward and done flags from configured manager terms."""
         dist = self._ee_goal_dist()
         ori_err_mag = self._orientation_error_magnitude()
         action_delta = self._last_action - self._prev_action
@@ -692,8 +758,8 @@ class URReachEnvBase:
             "failure": failure,
             "terminated": terminated,
             "time_out": time_up,
-            "goal_resample_elapsed_s": self._goal_resample_elapsed_s,
-            "goal_resample_target_s": self._next_goal_resample_s,
+            "goal_resample_elapsed_s": self._command_manager.elapsed_s,
+            "goal_resample_target_s": self._command_manager.target_s,
             "goal_resampled": goal_resampled,
             "goals_reached": self._goals_reached,
             "self_collisions": self._self_collision_count,
@@ -752,8 +818,6 @@ class URReachEnvBase:
         self._prev_action = self._last_action.copy()
         self._last_action = act.astype(np.float32).copy()
 
-        prev_targets = self._last_targets.copy()
-
         # Delegate to configured action term via manager
         qpos_targets = self._action_manager.compute_joint_targets(act)
         qpos_targets = self._clamp_to_limits(qpos_targets)
@@ -767,17 +831,6 @@ class URReachEnvBase:
 
         # Detect self-collision
         self._self_collision_count = self._collision_detector.count(self.data)
-
-        # Revert on collision
-        if self._self_collision_count > 0:
-            self._last_targets = prev_targets
-            for k, act_id in enumerate(self.robot_actuators):
-                self.data.ctrl[act_id] = prev_targets[k]
-            for dof in self.robot_dofs:
-                self.data.qvel[dof] = 0.0
-            mujoco.mj_forward(self.model, self.data)
-            for _ in range(self.n_substeps):
-                mujoco.mj_step(self.model, self.data)
 
         reward, done, info = self._compute_reward()
         self.step_id += 1

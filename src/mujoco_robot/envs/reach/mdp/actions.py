@@ -36,8 +36,6 @@ def ik_absolute_joint_targets(env, action: np.ndarray) -> np.ndarray:
 
 
 def joint_relative_targets(env, action: np.ndarray) -> np.ndarray:
-    """Relative-joint action: current_q + action * scale, optional hold/EMA."""
-    if np.linalg.norm(action) < env.hold_eps:
-        return env._last_targets.copy()
+    """Relative-joint action: current_q + action * scale, optional EMA."""
     raw_target = env._current_joint_pos() + action * env.joint_action_scale
     return env._ema_alpha * raw_target + (1.0 - env._ema_alpha) * env._last_targets

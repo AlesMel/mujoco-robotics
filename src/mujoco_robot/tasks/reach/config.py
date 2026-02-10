@@ -12,7 +12,7 @@ class ReachTaskConfig:
     """High-level configuration for the reach task."""
 
     robot: str = "ur3e"
-    control_variant: str = "ik_rel"
+    control_variant: str = "joint_pos"
     time_limit: int | None = None
     seed: int | None = None
     render_mode: str | None = None
