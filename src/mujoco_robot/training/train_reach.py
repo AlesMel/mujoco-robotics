@@ -2,13 +2,13 @@
 
 Usage::
 
-    python -m mujoco_robot.training.train_reach --robot ur5e --total-timesteps 500000
+    python -m mujoco_robot.training.train_reach --cfg-name ur5e_joint_pos --total-timesteps 500000
     python -m mujoco_robot.training.train_reach --cfg-name ur5e_joint_pos
 
 Or from Python::
 
     from mujoco_robot.training.train_reach import train_reach_ppo
-    model = train_reach_ppo(robot="ur5e", total_timesteps=500_000)
+    model = train_reach_ppo(cfg_name="ur5e_joint_pos", total_timesteps=500_000)
 """
 from __future__ import annotations
 
@@ -19,34 +19,23 @@ from stable_baselines3 import PPO
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import SubprocVecEnv, VecNormalize
 
-from mujoco_robot.tasks.reach import REACH_VARIANTS
 from mujoco_robot.tasks.reach import (
     get_reach_cfg,
     make_reach_manager_based_gymnasium,
 )
 from mujoco_robot.training.callbacks import BestEpisodeVideoCallback
-from mujoco_robot.training.reach_cli import (
-    DEFAULT_CFG_NAME,
-    add_reach_train_args,
-    reach_train_kwargs_from_args,
-)
+
+
+DEFAULT_CFG_NAME = "ur3e_joint_pos_dense_stable"
 
 
 def train_reach_ppo(
-    robot: str | None = None,
     total_timesteps: int = 10_000_000,
     n_envs: int = 16,
     log_dir: str = "runs",
     log_name: str = "reach_ppo",
     save_video: bool = True,
     save_video_every: int = 50_000,
-    control_variant: str | None = None,
-    reach_threshold: float | None = None,
-    ori_threshold: float | None = None,
-    success_hold_steps: int | None = None,
-    success_bonus: float | None = None,
-    stay_reward_weight: float | None = None,
-    resample_on_success: bool | None = None,
     progress_bar: bool = True,
     sb3_verbose: int = 0,
     callback_new_best_only: bool = True,
@@ -57,24 +46,8 @@ def train_reach_ppo(
 
     def build_cfg(seed: int | None, render_mode: str | None):
         cfg = get_reach_cfg(profile_name)
-        if robot is not None:
-            cfg.scene.robot = robot
         cfg.scene.render_mode = render_mode
         cfg.episode.seed = seed
-        if control_variant is not None:
-            cfg.actions.control_variant = control_variant
-        if reach_threshold is not None:
-            cfg.success.reach_threshold = reach_threshold
-        if ori_threshold is not None:
-            cfg.success.ori_threshold = ori_threshold
-        if success_hold_steps is not None:
-            cfg.success.success_hold_steps = success_hold_steps
-        if success_bonus is not None:
-            cfg.success.success_bonus = success_bonus
-        if stay_reward_weight is not None:
-            cfg.success.stay_reward_weight = stay_reward_weight
-        if resample_on_success is not None:
-            cfg.success.resample_on_success = resample_on_success
         return cfg
 
     preview_cfg = build_cfg(seed=0, render_mode=None)
@@ -84,6 +57,7 @@ def train_reach_ppo(
     print(f"  Config profile:   {profile_name}")
     print(f"  Robot:            {preview_cfg.scene.robot}")
     print(f"  Control variant:  {preview_cfg.actions.control_variant}")
+    print(f"  Joint act scale:  {preview_cfg.actions.joint_action_scale:.3f} (IsaacLab scale)")
     print(f"  Reach threshold:  {preview_cfg.success.reach_threshold:.3f} m")
     print(f"  Ori threshold:    {preview_cfg.success.ori_threshold:.2f} rad")
     print(f"  Hold steps:       {preview_cfg.success.success_hold_steps}")
@@ -170,14 +144,41 @@ def train_reach_ppo(
 
 def main():
     p = argparse.ArgumentParser(description="Train PPO on manager-based reach.")
-    add_reach_train_args(
-        p,
-        default_total_timesteps=10_000_000,
-        default_n_envs=16,
-        control_variant_choices=sorted(REACH_VARIANTS.keys()),
+    p.add_argument("--cfg-name", type=str, default=DEFAULT_CFG_NAME)
+    p.add_argument("--total-timesteps", type=int, default=10_000_000)
+    p.add_argument("--n-envs", type=int, default=16)
+    p.add_argument("--save-video", action=argparse.BooleanOptionalAction, default=True)
+    p.add_argument("--save-video-every", type=int, default=50_000)
+    p.add_argument(
+        "--progress-bar",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Use Stable-Baselines3 tqdm/rich progress bar.",
+    )
+    p.add_argument(
+        "--sb3-verbose",
+        type=int,
+        default=0,
+        choices=[0, 1, 2],
+        help="Stable-Baselines3 verbosity (0 recommended with progress bar).",
+    )
+    p.add_argument(
+        "--callback-new-best-only",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="If true, callback prints only when eval return reaches a new best.",
     )
     args = p.parse_args()
-    train_reach_ppo(**reach_train_kwargs_from_args(args))
+    train_reach_ppo(
+        total_timesteps=args.total_timesteps,
+        n_envs=args.n_envs,
+        save_video=args.save_video,
+        save_video_every=args.save_video_every,
+        progress_bar=args.progress_bar,
+        sb3_verbose=args.sb3_verbose,
+        callback_new_best_only=args.callback_new_best_only,
+        cfg_name=args.cfg_name,
+    )
 
 
 if __name__ == "__main__":

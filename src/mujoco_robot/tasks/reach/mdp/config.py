@@ -42,10 +42,10 @@ def default_command_term() -> CommandTermCfg:
 
 def default_observation_terms() -> tuple[ObservationTermCfg, ...]:
     return (
-        ObservationTermCfg(name="joint_pos_rel", fn=observations.joint_pos_relative),
-        ObservationTermCfg(name="joint_vel", fn=observations.joint_vel),
-        ObservationTermCfg(name="pose_command", fn=observations.pose_command_base),
-        ObservationTermCfg(name="last_action", fn=observations.last_action),
+        ObservationTermCfg(name="joint_pos", fn=observations.joint_pos_rel),
+        ObservationTermCfg(name="joint_vel", fn=observations.joint_vel_rel),
+        ObservationTermCfg(name="pose_command", fn=observations.generated_commands_ee_pose),
+        ObservationTermCfg(name="actions", fn=observations.last_action),
     )
 
 

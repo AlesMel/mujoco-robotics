@@ -165,7 +165,7 @@ class URReachEnvBase:
         joint_pos        6   joint angles relative to home (noise ±0.01)
         joint_vel        6   joint velocities (noise ±0.01)
         pose_command     7   goal pose in base frame (pos_xyz, quat_wxyz)
-        last_action      6   previous action (zeros at reset)
+        actions          6   previous action (zeros at reset)
         ============== ===== ===================================
         → total = 25   (matches Isaac Lab reach env exactly)
 
@@ -394,10 +394,10 @@ class URReachEnvBase:
 
     @property
     def observation_dim(self) -> int:
-        """Observation dimensionality: 19 base + action_dim (last_action).
+        """Observation dimensionality: 19 base + action_dim (actions).
 
         Matches Isaac Lab reach env: joint_pos(6) + joint_vel(6) +
-        pose_command(7) + last_action(action_dim).
+        pose_command(7) + actions(action_dim).
         """
         if hasattr(self, "_manager_runtime") and self._manager_runtime.has("observation"):
             return int(self._manager("observation").dim)

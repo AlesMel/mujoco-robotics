@@ -72,7 +72,7 @@ class RandomizationCfg:
 class PhysicsCfg:
     """Physics and actuator tuning."""
 
-    actuator_kp: float = 250.0
+    actuator_kp: float = 500.0
     min_joint_damping: float = 20.0
     min_joint_frictionloss: float = 1.0
     obs_noise: float = 0.01

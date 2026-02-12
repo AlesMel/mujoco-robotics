@@ -49,7 +49,7 @@ def _append_observation_lines(env: Any, lines: list[tuple[str, tuple[int, int, i
     lines.append(("", (255, 255, 255)))
     lines.append((f"Obs(raw) dim: {obs.shape[0]}", (180, 220, 255)))
 
-    # Canonical reach observation layout: q_rel(6), qd(6), cmd(7), last_action(6).
+    # Canonical reach observation layout: q_rel(6), qd(6), cmd(7), actions(6).
     expected = (2 * n_j) + 7 + action_dim
     if n_j > 0 and action_dim > 0 and obs.shape[0] >= expected:
         idx = 0
@@ -59,7 +59,7 @@ def _append_observation_lines(env: Any, lines: list[tuple[str, tuple[int, int, i
         idx += n_j
         cmd = obs[idx:idx + 7]
         idx += 7
-        last_action_obs = obs[idx:idx + action_dim]
+        actions_obs = obs[idx:idx + action_dim]
 
         lines.append(
             (
@@ -81,7 +81,7 @@ def _append_observation_lines(env: Any, lines: list[tuple[str, tuple[int, int, i
         )
         lines.append(
             (
-                f"Obs last act: {np.linalg.norm(last_action_obs):.3f}",
+                f"Obs actions:  {np.linalg.norm(actions_obs):.3f}",
                 (180, 220, 255),
             )
         )

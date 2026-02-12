@@ -17,8 +17,8 @@ def make_ur3e_joint_pos_cfg() -> ReachEnvCfg:
             goal_yaw_range=(-0.5, 0.5),
         ),
         physics=PhysicsCfg(
-            actuator_kp=100.0,
-            min_joint_damping=60.0,
+            actuator_kp=500.0,
+            min_joint_damping=20.0,
             min_joint_frictionloss=1.2,
         ),
         managers=ManagerCfg(
