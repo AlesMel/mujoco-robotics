@@ -6,13 +6,13 @@ import mujoco
 import numpy as np
 import pytest
 
-from mujoco_robot.robots.actuators import (
+from mujoco_robot.assets.actuators import (
     ROBOT_ACTUATOR_CONFIGS,
     configure_position_actuators,
     get_robot_actuator_config,
     resolve_robot_actuators,
 )
-from mujoco_robot.robots.configs import get_robot_config
+from mujoco_robot.assets.configs import get_robot_config
 
 
 def test_builtin_actuator_profiles_exist() -> None:

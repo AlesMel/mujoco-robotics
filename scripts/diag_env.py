@@ -1,5 +1,5 @@
 """Diagnostic: check if the environment is working properly."""
-from mujoco_robot.envs.reach import ReachIKRelEnv, ReachJointPosEnv
+from mujoco_robot.tasks.reach import ReachIKRelEnv, ReachJointPosEnv
 import numpy as np
 
 # Test with JOINT mode (default for training)

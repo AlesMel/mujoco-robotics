@@ -2,8 +2,8 @@
 
 Usage::
 
-    from mujoco_robot.envs.reach import ReachJointPosEnv
-    from mujoco_robot.envs.slot_sorter import URSlotSorterEnv
+    from mujoco_robot.tasks.reach import ReachJointPosEnv
+    from mujoco_robot.tasks.slot_sorter.slot_sorter_env import URSlotSorterEnv
     from mujoco_robot.teleop import ReachTeleop, SlotSorterTeleop
 
     # Reach task

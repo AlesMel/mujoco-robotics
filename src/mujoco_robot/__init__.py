@@ -2,7 +2,7 @@
 
 Quick start::
 
-    from mujoco_robot.envs.reach import ReachJointPosEnv, ReachJointPosGymnasium
+    from mujoco_robot.tasks.reach import ReachJointPosEnv, ReachJointPosGymnasium
 
     # Raw environment (no Gymnasium dependency)
     env = ReachJointPosEnv(robot="ur5e")
@@ -25,7 +25,7 @@ Quick start::
     )
 
     # Or import the modular variant directly (Isaac Lab style):
-    from mujoco_robot.envs.reach import ReachIKRelEnv, ReachIKRelGymnasium
+    from mujoco_robot.tasks.reach import ReachIKRelEnv, ReachIKRelGymnasium
 """
 
 __version__ = "0.2.0"
@@ -39,7 +39,7 @@ import gymnasium
 gymnasium.register(
     id="MuJoCoRobot/Reach-v0",
     entry_point=(
-        "mujoco_robot.tasks.manager_based.manipulation.reach.reach_env:"
+        "mujoco_robot.tasks.reach.reach_env:"
         "ReachManagerBasedRLEnv"
     ),
     kwargs={"cfg": "ur3e_joint_pos_dense_stable"},
@@ -50,7 +50,7 @@ gymnasium.register(
 gymnasium.register(
     id="MuJoCoRobot/Reach-IK-Rel-v0",
     entry_point=(
-        "mujoco_robot.tasks.manager_based.manipulation.reach.reach_env:"
+        "mujoco_robot.tasks.reach.reach_env:"
         "ReachManagerBasedRLEnv"
     ),
     kwargs={"cfg": "ur3e_ik_rel"},
@@ -60,7 +60,7 @@ gymnasium.register(
 gymnasium.register(
     id="MuJoCoRobot/Reach-IK-Abs-v0",
     entry_point=(
-        "mujoco_robot.tasks.manager_based.manipulation.reach.reach_env:"
+        "mujoco_robot.tasks.reach.reach_env:"
         "ReachManagerBasedRLEnv"
     ),
     kwargs={"cfg": "ur3e_ik_abs"},
@@ -70,7 +70,7 @@ gymnasium.register(
 gymnasium.register(
     id="MuJoCoRobot/Reach-Joint-Pos-v0",
     entry_point=(
-        "mujoco_robot.tasks.manager_based.manipulation.reach.reach_env:"
+        "mujoco_robot.tasks.reach.reach_env:"
         "ReachManagerBasedRLEnv"
     ),
     kwargs={"cfg": "ur3e_joint_pos_dense_stable"},
@@ -80,7 +80,7 @@ gymnasium.register(
 gymnasium.register(
     id="MuJoCoRobot/Reach-Joint-Pos-Isaac-Reward-v0",
     entry_point=(
-        "mujoco_robot.tasks.manager_based.manipulation.reach.reach_env:"
+        "mujoco_robot.tasks.reach.reach_env:"
         "ReachManagerBasedRLEnv"
     ),
     kwargs={
@@ -92,12 +92,12 @@ gymnasium.register(
 
 gymnasium.register(
     id="MuJoCoRobot/Slot-Sorter-v0",
-    entry_point="mujoco_robot.envs.slot_sorter.slot_sorter_env:SlotSorterGymnasium",
+    entry_point="mujoco_robot.tasks.slot_sorter.slot_sorter_env:SlotSorterGymnasium",
     max_episode_steps=400,
 )
 
 gymnasium.register(
     id="MuJoCoRobot/Lift-Suction-v0",
-    entry_point="mujoco_robot.envs.lift_suction.lift_suction_env:LiftSuctionGymnasium",
+    entry_point="mujoco_robot.tasks.lift_suction.lift_suction_env:LiftSuctionGymnasium",
     max_episode_steps=300,
 )

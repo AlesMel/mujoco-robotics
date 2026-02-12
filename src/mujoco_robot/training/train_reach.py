@@ -19,8 +19,8 @@ from stable_baselines3 import PPO
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import SubprocVecEnv, VecNormalize
 
-from mujoco_robot.envs.reach import REACH_VARIANTS
-from mujoco_robot.tasks.manager_based.manipulation.reach import (
+from mujoco_robot.tasks.reach import REACH_VARIANTS
+from mujoco_robot.tasks.reach import (
     get_reach_cfg,
     make_reach_manager_based_gymnasium,
 )

@@ -1,6 +1,6 @@
 """IsaacLab-style task layer: configs, factories, registry."""
 
-from mujoco_robot.tasks.manager_based.manipulation.reach import (
+from mujoco_robot.tasks.reach import (
     ReachEnvCfg,
     make_reach_manager_based_env,
     make_reach_manager_based_gymnasium,

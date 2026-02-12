@@ -1,7 +1,7 @@
 """Factories for creating slot-sorter task environments."""
 from __future__ import annotations
 
-from mujoco_robot.envs.slot_sorter import SlotSorterGymnasium, URSlotSorterEnv
+from mujoco_robot.tasks.slot_sorter.slot_sorter_env import SlotSorterGymnasium, URSlotSorterEnv
 from mujoco_robot.tasks.slot_sorter.config import SlotSorterTaskConfig
 
 

@@ -22,7 +22,7 @@ import imageio.v3 as iio
 import numpy as np
 
 from mujoco_robot.core.ik_controller import orientation_error_axis_angle
-from mujoco_robot.envs.reach import ReachIKRelEnv
+from mujoco_robot.tasks.reach import ReachIKRelEnv
 
 
 # ────────────────────────────────────────────────────────────────────────

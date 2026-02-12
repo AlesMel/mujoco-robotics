@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mujoco-robot"
-version = "0.1.0"
+version = "0.2.0"
 description = "MuJoCo RL environments for UR robot arms — reach and slot-sorter tasks."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -40,18 +40,15 @@ dev = [
 ]
 
 [project.scripts]
-mr-teleop = "mujoco_robot.scripts.teleop:main"
-mr-train  = "mujoco_robot.scripts.train:main"
-mr-smoke  = "mujoco_robot.scripts.visual_smoke:main"
-mr-eval-reach = "mujoco_robot.scripts.eval_reach:main"
-mr-eval-lift-suction = "mujoco_robot.scripts.eval_lift_suction:main"
+mr-train  = "mujoco_robot.training.train_reach:main"
+mr-eval-reach = "mujoco_robot.training.eval_reach:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 namespaces = false
 
 [tool.setuptools.package-data]
-"mujoco_robot.robots" = ["*.xml", "assets/**/*.obj", "assets/**/*.stl", "assets/**/*.txt"]
+"mujoco_robot.assets" = ["*.xml", "meshes/**/*.obj", "meshes/**/*.stl", "meshes/**/*.txt"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

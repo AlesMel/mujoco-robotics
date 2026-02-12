@@ -7,10 +7,8 @@ import pytest
 import gymnasium
 
 import mujoco_robot  # noqa: F401  # ensures Gym IDs are registered
-from mujoco_robot.envs.lift_suction import URLiftSuctionEnv as NewLiftSuctionEnv
-from mujoco_robot.envs.lift_suction_env import URLiftSuctionEnv as LegacyLiftSuctionEnv
-from mujoco_robot.envs.slot_sorter import URSlotSorterEnv as NewSlotSorterEnv
-from mujoco_robot.envs.slot_sorter_env import URSlotSorterEnv as LegacySlotSorterEnv
+from mujoco_robot.tasks.lift_suction import URLiftSuctionEnv
+from mujoco_robot.tasks.slot_sorter import URSlotSorterEnv
 from mujoco_robot.tasks import (
     LiftSuctionTaskConfig,
     ReachEnvCfg,
@@ -21,14 +19,16 @@ from mujoco_robot.tasks import (
 )
 
 
-def test_slot_sorter_shim_points_to_new_package() -> None:
-    """Legacy slot-sorter import should still point to the same class."""
-    assert LegacySlotSorterEnv is NewSlotSorterEnv
+def test_slot_sorter_env_class_importable() -> None:
+    """URSlotSorterEnv should be importable from tasks.slot_sorter."""
+    assert URSlotSorterEnv is not None
+    assert callable(URSlotSorterEnv)
 
 
-def test_lift_suction_shim_points_to_new_package() -> None:
-    """Legacy lift-suction import should still point to the same class."""
-    assert LegacyLiftSuctionEnv is NewLiftSuctionEnv
+def test_lift_suction_env_class_importable() -> None:
+    """URLiftSuctionEnv should be importable from tasks.lift_suction."""
+    assert URLiftSuctionEnv is not None
+    assert callable(URLiftSuctionEnv)
 
 
 def test_task_registry_lists_builtin_tasks() -> None:

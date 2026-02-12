@@ -1,53 +1,15 @@
-"""Gymnasium-ready environments for UR robot tasks.
+"""Generic manager-based environment runtime.
 
-Reach variants (Isaac Lab style — each action space is a separate class):
+Provides the base classes for building config-driven RL environments:
 
-* :class:`ReachIKRelEnv` / :class:`ReachIKRelGymnasium` — IK-Relative
-* :class:`ReachIKAbsEnv` / :class:`ReachIKAbsGymnasium` — IK-Absolute
-* :class:`ReachJointPosEnv` / :class:`ReachJointPosGymnasium` — Joint-Position
-* :class:`ReachJointPosIsaacRewardEnv` / :class:`ReachJointPosIsaacRewardGymnasium`
-  — Joint-Position with Isaac reward terms
+* :class:`ManagerBasedEnv` — abstract base with reset/step/close
+* :class:`ManagerBasedRLEnv` — Gymnasium-compatible base
+* :class:`ManagerRuntime` — named manager container
 """
 
-# --- Modular reach variants (preferred) ---
-from mujoco_robot.envs.reach import (
-    URReachEnvBase,
-    ReachGymnasiumBase,
-    StepResult,
-    ReachIKRelEnv,
-    ReachIKRelGymnasium,
-    ReachIKAbsEnv,
-    ReachIKAbsGymnasium,
-    ReachJointPosEnv,
-    ReachJointPosGymnasium,
-    ReachJointPosIsaacRewardEnv,
-    ReachJointPosIsaacRewardGymnasium,
-    REACH_VARIANTS,
-)
+from mujoco_robot.envs.base_env import ManagerBasedEnv
+from mujoco_robot.envs.base_rl_env import ManagerBasedRLEnv
+from mujoco_robot.envs.manager_runtime import ManagerRuntime
+from mujoco_robot.envs.step_result import StepResult
 
-# --- Slot sorter ---
-from mujoco_robot.envs.slot_sorter import URSlotSorterEnv, SlotSorterGymnasium
-from mujoco_robot.envs.lift_suction import URLiftSuctionEnv, LiftSuctionGymnasium
-
-__all__ = [
-    # Base
-    "URReachEnvBase",
-    "ReachGymnasiumBase",
-    "StepResult",
-    # Modular variants
-    "ReachIKRelEnv",
-    "ReachIKRelGymnasium",
-    "ReachIKAbsEnv",
-    "ReachIKAbsGymnasium",
-    "ReachJointPosEnv",
-    "ReachJointPosGymnasium",
-    "ReachJointPosIsaacRewardEnv",
-    "ReachJointPosIsaacRewardGymnasium",
-    "REACH_VARIANTS",
-    # Slot sorter
-    "URSlotSorterEnv",
-    "SlotSorterGymnasium",
-    # Lift suction
-    "URLiftSuctionEnv",
-    "LiftSuctionGymnasium",
-]
+__all__ = ["ManagerBasedEnv", "ManagerBasedRLEnv", "ManagerRuntime", "StepResult"]

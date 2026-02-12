@@ -17,7 +17,7 @@ from stable_baselines3 import PPO
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 
-from mujoco_robot.envs.slot_sorter import SlotSorterGymnasium
+from mujoco_robot.tasks.slot_sorter.slot_sorter_env import SlotSorterGymnasium
 from mujoco_robot.training.callbacks import BestEpisodeVideoCallback
 
 

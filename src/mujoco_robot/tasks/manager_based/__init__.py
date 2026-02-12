@@ -1,2 +1,0 @@
-"""Manager-based task definitions."""
-

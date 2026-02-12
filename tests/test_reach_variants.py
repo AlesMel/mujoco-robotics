@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 
 import mujoco_robot  # noqa: F401  # ensures Gym IDs are registered
-from mujoco_robot.envs.reach import REACH_VARIANTS
+from mujoco_robot.tasks.reach import REACH_VARIANTS
 
 
 def _make_variant_env(variant: str, **kwargs):

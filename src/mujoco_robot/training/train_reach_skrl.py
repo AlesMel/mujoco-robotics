@@ -15,8 +15,8 @@ from typing import Any
 
 import gymnasium as gym
 
-from mujoco_robot.envs.reach import REACH_VARIANTS
-from mujoco_robot.tasks.manager_based.manipulation.reach import (
+from mujoco_robot.tasks.reach import REACH_VARIANTS
+from mujoco_robot.tasks.reach import (
     get_reach_cfg,
     make_reach_manager_based_gymnasium,
 )
@@ -210,7 +210,7 @@ def train_reach_skrl_ppo(
 
 
 def main() -> None:
-    from mujoco_robot.robots.configs import ROBOT_CONFIGS
+    from mujoco_robot.assets.configs import ROBOT_CONFIGS
 
     p = argparse.ArgumentParser(description="Train SKRL PPO on reach task.")
     p.add_argument("--robot", type=str, default="ur3e", choices=list(ROBOT_CONFIGS))

@@ -11,7 +11,7 @@ _SRC = _ROOT / "src"
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
-from mujoco_robot.scripts.eval_lift_suction import main
+from mujoco_robot.training.eval_lift_suction import main
 
 
 if __name__ == "__main__":

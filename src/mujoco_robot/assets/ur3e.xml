@@ -1,0 +1,212 @@
+<mujoco model="ur3e">
+  <!--
+    UR3e model with native UR3e visual meshes (OBJ) converted from the
+    official ROS-Industrial DAE description.
+    Source: github.com/ros-industrial/universal_robot (kinetic-devel)
+    License: BSD-3-Clause (ROS Industrial Consortium).
+
+    Body/joint/site/actuator names follow the project convention
+    (see core/collision.py, envs/*.py).
+
+    DH parameters from UR ROS2 official description:
+      d1 = 0.15185 m   a2 = 0.24355 m   a3 = 0.2132 m
+      d4 = 0.13105 m   d5 = 0.08535 m   d6 = 0.0921 m
+  -->
+  <compiler angle="radian" meshdir="meshes/ur3e" autolimits="true"/>
+  <option timestep="0.002" gravity="0 0 -9.81" integrator="implicitfast"/>
+
+  <visual>
+    <quality shadowsize="4096"/>
+    <map fogstart="8" fogend="12"/>
+  </visual>
+
+  <default>
+    <default class="ur3e">
+      <material specular="0.5" shininess="0.25"/>
+      <joint axis="0 1 0" range="-6.28319 6.28319" armature="0.1"/>
+      <general gaintype="fixed" biastype="affine"
+               ctrlrange="-6.2831 6.2831"
+               gainprm="1000" biasprm="0 -1000 -200"
+               forcerange="-56 56"/>
+
+      <default class="size3">
+        <default class="size3_limited">
+          <joint range="-3.1415 3.1415"/>
+            <general gainprm="500" biasprm="0 -500 -100" ctrlrange="-3.14159 3.14159" forcerange="-28 28"/>
+        </default>
+      </default>
+      <default class="size1">
+        <general gainprm="200" biasprm="0 -200 -40"
+                 forcerange="-12 12"/>
+      </default>
+
+      <default class="visual">
+        <geom type="mesh" contype="0" conaffinity="0" group="2"/>
+      </default>
+      <default class="collision">
+        <geom type="capsule" group="3" contype="1" conaffinity="1"/>
+        <default class="eef_collision">
+          <geom type="cylinder"/>
+        </default>
+      </default>
+
+      <site size="0.001" rgba="0.5 0.5 0.5 0.3" group="4"/>
+    </default>
+  </default>
+
+  <asset>
+    <texture name="grid" type="2d" builtin="checker" width="256" height="256"
+             rgb1="0.9 0.9 0.9" rgb2="0.8 0.8 0.8"/>
+    <material name="tablemat" texture="grid" texrepeat="3 3" reflectance="0.05"/>
+
+    <!-- UR colour palette (from Menagerie) -->
+    <material class="ur3e" name="black"     rgba="0.033 0.033 0.033 1"/>
+    <material class="ur3e" name="jointgray" rgba="0.278 0.278 0.278 1"/>
+    <material class="ur3e" name="linkgray"  rgba="0.82  0.82  0.82  1"/>
+    <material class="ur3e" name="urblue"    rgba="0.49  0.678 0.8   1"/>
+
+    <!-- Native UR3e visual meshes (OBJ from ROS-Industrial DAE,
+         converted with mm→m scale + Y-up→Z-up axis transform) -->
+    <mesh file="base_0.obj"/>
+    <mesh file="base_1.obj"/>
+    <mesh file="shoulder_0.obj"/>
+    <mesh file="shoulder_1.obj"/>
+    <mesh file="shoulder_2.obj"/>
+    <mesh file="upperarm_0.obj"/>
+    <mesh file="upperarm_1.obj"/>
+    <mesh file="upperarm_2.obj"/>
+    <mesh file="upperarm_3.obj"/>
+    <mesh file="forearm_0.obj"/>
+    <mesh file="forearm_1.obj"/>
+    <mesh file="forearm_2.obj"/>
+    <mesh file="forearm_3.obj"/>
+    <mesh file="wrist1_0.obj"/>
+    <mesh file="wrist1_1.obj"/>
+    <mesh file="wrist1_2.obj"/>
+    <mesh file="wrist2_0.obj"/>
+    <mesh file="wrist2_1.obj"/>
+    <mesh file="wrist2_2.obj"/>
+    <mesh file="wrist3.obj"/>
+  </asset>
+
+  <worldbody>
+    <light pos="2 2 4" dir="-1 -1 -2"/>
+    <geom name="table" type="box" pos="0 0 0.72" size="0.6 0.6 0.02"
+          material="tablemat" rgba="0.84 0.78 0.68 1"/>
+    <!-- Legs to make the table visually closer to Isaac Lab's table prop. -->
+    <geom name="table_leg_fl" type="box" pos="0.52 0.52 0.36" size="0.03 0.03 0.36"
+          rgba="0.35 0.35 0.35 1" friction="1 0.1 0.1"/>
+    <geom name="table_leg_fr" type="box" pos="0.52 -0.52 0.36" size="0.03 0.03 0.36"
+          rgba="0.35 0.35 0.35 1" friction="1 0.1 0.1"/>
+    <geom name="table_leg_rl" type="box" pos="-0.52 0.52 0.36" size="0.03 0.03 0.36"
+          rgba="0.35 0.35 0.35 1" friction="1 0.1 0.1"/>
+    <geom name="table_leg_rr" type="box" pos="-0.52 -0.52 0.36" size="0.03 0.03 0.36"
+          rgba="0.35 0.35 0.35 1" friction="1 0.1 0.1"/>
+    <geom name="floor" type="plane" pos="0 0 0" size="4 4 0.1"
+          rgba="0.9 0.9 0.9 1" friction="1 0.1 0.1"/>
+    <camera name="top" pos="0.1 -0.2 2.0" xyaxes="1 0 0 0 1 0" mode="fixed"/>
+
+    <!-- ================= UR3e Robot ================= -->
+    <!-- d1 = 0.15185 (vs UR5e 0.163) -->
+    <body name="base" pos="-0.15 0 0.74" quat="1 0 0 0" childclass="ur3e">
+      <inertial mass="2.0" pos="0 0 0" diaginertia="0.0022 0.0022 0.0036"/>
+      <geom mesh="base_0" material="black" class="visual" name="base_viz_0"/>
+      <geom mesh="base_1" material="jointgray" class="visual" name="base_viz_1"/>
+      <geom name="base_col" class="collision" size="0.05 0.05" pos="0 0 -0.03"/>
+
+      <!-- shoulder: d1 = 0.15185 -->
+      <body name="shoulder" pos="0 0 0.15185">
+        <inertial mass="2.0" pos="0 0 0" diaginertia="0.0055 0.0055 0.0036"/>
+        <joint name="shoulder_pan" class="size3" axis="0 0 1"/>
+        <geom mesh="shoulder_0" material="urblue" class="visual" name="link1_viz_0"/>
+        <geom mesh="shoulder_1" material="black" class="visual" name="link1_viz_1"/>
+        <geom mesh="shoulder_2" material="jointgray" class="visual" name="link1_viz_2"/>
+        <geom name="shoulder_col" class="collision" size="0.05 0.05" pos="0 0 -0.03"/>
+
+        <!-- upper_arm: offset y scaled, a2 = 0.24355 -->
+        <body name="upper_arm" pos="0 0.120 0" quat="1 0 1 0">
+          <inertial mass="3.42" pos="0 0 0.122"
+                    diaginertia="0.022 0.022 0.005"/>
+          <joint name="shoulder_lift" class="size3"/>
+          <geom mesh="upperarm_0" material="linkgray" class="visual" name="link2_viz_0"/>
+          <geom mesh="upperarm_1" material="black" class="visual" name="link2_viz_1"/>
+          <geom mesh="upperarm_2" material="jointgray" class="visual" name="link2_viz_2"/>
+          <geom mesh="upperarm_3" material="urblue" class="visual" name="link2_viz_3"/>
+          <geom name="upper_arm_col_0" class="collision" pos="0 -0.03 0" quat="1 1 0 0" size="0.05 0.05"/>
+          <geom name="upper_arm_col_1" class="collision" size="0.04 0.115" pos="0 0 0.115"/>
+
+          <!-- forearm: offset y scaled, a3 = 0.2132 at z = 0.24355 -->
+          <body name="forearm" pos="0 -0.093 0.24355">
+            <inertial mass="1.26" pos="0 0 0.107"
+                      diaginertia="0.006 0.006 0.001"/>
+            <joint name="elbow" class="size3_limited"/>
+            <geom mesh="forearm_0" material="urblue" class="visual" name="link3_viz_0"/>
+            <geom mesh="forearm_1" material="linkgray" class="visual" name="link3_viz_1"/>
+            <geom mesh="forearm_2" material="black" class="visual" name="link3_viz_2"/>
+            <geom mesh="forearm_3" material="jointgray" class="visual" name="link3_viz_3"/>
+            <geom name="forearm_col_0" class="collision" pos="0 0.06 0" quat="1 1 0 0" size="0.045 0.05"/>
+            <geom name="forearm_col_1" class="collision" size="0.03 0.10" pos="0 0 0.107"/>
+
+            <!-- wrist1: d4 = 0.13105 at z = 0.2132 -->
+            <body name="wrist1" pos="0 0 0.2132" quat="1 0 1 0">
+              <inertial mass="0.8" pos="0 0.104 0"
+                        diaginertia="0.0013 0.0013 0.001"/>
+              <joint name="wrist1" class="size1"/>
+              <geom mesh="wrist1_0" material="black" class="visual" name="link4_viz_0"/>
+              <geom mesh="wrist1_1" material="urblue" class="visual" name="link4_viz_1"/>
+              <geom mesh="wrist1_2" material="jointgray" class="visual" name="link4_viz_2"/>
+              <geom name="wrist1_col" class="collision" pos="0 0.04 0" quat="1 1 0 0" size="0.035 0.06"/>
+
+              <!-- wrist2: d4-elbow_offset = 0.13105-0.027 = 0.10405 -->
+              <body name="wrist2" pos="0 0.10405 0">
+                <inertial mass="0.8" pos="0 0 0.086"
+                          diaginertia="0.0013 0.0013 0.001"/>
+                <joint name="wrist2" axis="0 0 1" class="size1"/>
+                <geom mesh="wrist2_0" material="black" class="visual" name="link5_viz_0"/>
+                <geom mesh="wrist2_1" material="urblue" class="visual" name="link5_viz_1"/>
+                <geom mesh="wrist2_2" material="jointgray" class="visual" name="link5_viz_2"/>
+                <geom name="wrist2_col_0" class="collision" size="0.035 0.05" pos="0 0 0.035"/>
+                <geom name="wrist2_col_1" class="collision" pos="0 0.017 0.086" quat="1 1 0 0" size="0.035 0.035"/>
+
+                <!-- wrist3: d6 = 0.0921 at z = 0.08535 -->
+                <body name="wrist3" pos="0 0 0.08535">
+                  <inertial mass="0.1889" pos="0 0.066 0" quat="1 0 0 1"
+                            diaginertia="0.000132 9.91e-05 9.91e-05"/>
+                  <joint name="wrist3" class="size1"/>
+                  <geom material="linkgray" mesh="wrist3" class="visual" name="link6_viz"/>
+                  <geom name="wrist3_col" class="eef_collision" pos="0 0.07 0" quat="1 1 0 0" size="0.035 0.017"/>
+
+                  <!-- End-effector camera (moves with the tool flange) -->
+                  <camera name="ee_cam" pos="0 0.12 0" xyaxes="1 0 0 0 0 1"
+                          fovy="60" mode="fixed"/>
+
+                  <!-- End-effector site and sphere (project convention) -->
+                  <site name="ee_site" pos="0 0.0921 0" quat="-1 1 0 0" size="0.01"
+                        rgba="0.1 0.8 0.2 1"/>
+                  <geom name="ee_sphere" type="sphere" pos="0 0.0921 0"
+                        size="0.015" rgba="0.1 0.8 0.2 0.6"
+                        contype="0" conaffinity="0"/>
+                </body>
+              </body>
+            </body>
+          </body>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+
+  <actuator>
+    <general class="size3" name="shoulder_pan_motor" joint="shoulder_pan"/>
+    <general class="size3" name="shoulder_lift_motor" joint="shoulder_lift"/>
+    <general class="size3_limited" name="elbow_motor" joint="elbow"/>
+    <general class="size1" name="wrist1_motor" joint="wrist1"/>
+    <general class="size1" name="wrist2_motor" joint="wrist2"/>
+    <general class="size1" name="wrist3_motor" joint="wrist3"/>
+  </actuator>
+
+  <keyframe>
+    <key name="home"
+         qpos="-0.4147 -1.5708 1.5708 -1.5708 -1.5708 0"
+         ctrl="-0.4147 -1.5708 1.5708 -1.5708 -1.5708 0"/>
+  </keyframe>
+</mujoco>

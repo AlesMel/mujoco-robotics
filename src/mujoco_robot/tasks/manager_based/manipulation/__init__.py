@@ -1,2 +1,0 @@
-"""Manager-based manipulation tasks."""
-

@@ -1,7 +1,7 @@
 """Factories for creating lift-suction task environments."""
 from __future__ import annotations
 
-from mujoco_robot.envs.lift_suction import LiftSuctionGymnasium, URLiftSuctionEnv
+from mujoco_robot.tasks.lift_suction.lift_suction_env import LiftSuctionGymnasium, URLiftSuctionEnv
 from mujoco_robot.tasks.lift_suction.config import LiftSuctionTaskConfig
 
 

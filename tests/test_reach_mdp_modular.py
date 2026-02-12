@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import numpy as np
 
-from mujoco_robot.envs.reach import ReachIKRelEnv
-from mujoco_robot.tasks.manager_based.manipulation.reach.mdp import (
+from mujoco_robot.tasks.reach import ReachIKRelEnv
+from mujoco_robot.tasks.reach.mdp import (
     ActionTermCfg,
     ObservationTermCfg,
     ReachRewardCfg,

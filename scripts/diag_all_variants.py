@@ -15,7 +15,7 @@ Observation layout (Isaac Lab aligned, 25-D for 6-DOF):
 from __future__ import annotations
 import sys, traceback
 import numpy as np
-from mujoco_robot.envs.reach import ReachIKAbsEnv, ReachIKRelEnv, ReachJointPosEnv
+from mujoco_robot.tasks.reach import ReachIKAbsEnv, ReachIKRelEnv, ReachJointPosEnv
 from mujoco_robot.core.ik_controller import (
     orientation_error_axis_angle,
     quat_multiply,

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from mujoco_robot.tasks.manager_based.manipulation.reach.config import (
+from mujoco_robot.tasks.reach.config import (
     get_reach_cfg,
     list_reach_cfgs,
 )

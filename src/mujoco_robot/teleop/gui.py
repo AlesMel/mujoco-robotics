@@ -14,7 +14,7 @@ A tkinter-based graphical interface with:
 
 Usage::
 
-    from mujoco_robot.envs.reach import ReachJointPosEnv
+    from mujoco_robot.tasks.reach import ReachJointPosEnv
     from mujoco_robot.teleop.gui import GUITeleop
 
     env = ReachJointPosEnv(robot="ur5e", time_limit=0)
@@ -22,7 +22,7 @@ Usage::
 
 Or via CLI::
 
-    python -m mujoco_robot.scripts.teleop --task reach --robot ur5e --gui
+    python -m mujoco_robot.training.train_reach --help
 """
 from __future__ import annotations
 
