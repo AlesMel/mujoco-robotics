@@ -35,38 +35,58 @@ __version__ = "0.2.0"
 # ---------------------------------------------------------------------------
 import gymnasium
 
-# Default reach ID points to joint-position control.
+# Reach IDs now route through the manager-based runtime.
 gymnasium.register(
     id="MuJoCoRobot/Reach-v0",
-    entry_point="mujoco_robot.envs.reach.reach_env_joint_pos:ReachJointPosGymnasium",
+    entry_point=(
+        "mujoco_robot.tasks.manager_based.manipulation.reach.reach_env:"
+        "ReachManagerBasedRLEnv"
+    ),
+    kwargs={"cfg": "ur3e_joint_pos_dense_stable"},
     max_episode_steps=360,
 )
 
-# Modular variants — each points directly to its Gymnasium class
+# Reach control variants
 gymnasium.register(
     id="MuJoCoRobot/Reach-IK-Rel-v0",
-    entry_point="mujoco_robot.envs.reach.reach_env_ik_rel:ReachIKRelGymnasium",
+    entry_point=(
+        "mujoco_robot.tasks.manager_based.manipulation.reach.reach_env:"
+        "ReachManagerBasedRLEnv"
+    ),
+    kwargs={"cfg": "ur3e_ik_rel"},
     max_episode_steps=360,
 )
 
 gymnasium.register(
     id="MuJoCoRobot/Reach-IK-Abs-v0",
-    entry_point="mujoco_robot.envs.reach.reach_env_ik_abs:ReachIKAbsGymnasium",
+    entry_point=(
+        "mujoco_robot.tasks.manager_based.manipulation.reach.reach_env:"
+        "ReachManagerBasedRLEnv"
+    ),
+    kwargs={"cfg": "ur3e_ik_abs"},
     max_episode_steps=360,
 )
 
 gymnasium.register(
     id="MuJoCoRobot/Reach-Joint-Pos-v0",
-    entry_point="mujoco_robot.envs.reach.reach_env_joint_pos:ReachJointPosGymnasium",
+    entry_point=(
+        "mujoco_robot.tasks.manager_based.manipulation.reach.reach_env:"
+        "ReachManagerBasedRLEnv"
+    ),
+    kwargs={"cfg": "ur3e_joint_pos_dense_stable"},
     max_episode_steps=360,
 )
 
 gymnasium.register(
     id="MuJoCoRobot/Reach-Joint-Pos-Isaac-Reward-v0",
     entry_point=(
-        "mujoco_robot.envs.reach.reach_env_joint_pos_isaac_reward:"
-        "ReachJointPosIsaacRewardGymnasium"
+        "mujoco_robot.tasks.manager_based.manipulation.reach.reach_env:"
+        "ReachManagerBasedRLEnv"
     ),
+    kwargs={
+        "cfg": "ur3e_joint_pos_dense_stable",
+        "control_variant": "joint_pos_isaac_reward",
+    },
     max_episode_steps=360,
 )
 
@@ -74,4 +94,10 @@ gymnasium.register(
     id="MuJoCoRobot/Slot-Sorter-v0",
     entry_point="mujoco_robot.envs.slot_sorter.slot_sorter_env:SlotSorterGymnasium",
     max_episode_steps=400,
+)
+
+gymnasium.register(
+    id="MuJoCoRobot/Lift-Suction-v0",
+    entry_point="mujoco_robot.envs.lift_suction.lift_suction_env:LiftSuctionGymnasium",
+    max_episode_steps=300,
 )

@@ -12,7 +12,6 @@ import argparse
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 import mujoco
 import mujoco.viewer
@@ -24,6 +23,8 @@ from mujoco_robot.tasks.manager_based.manipulation.reach import (
     get_reach_cfg,
     make_reach_manager_based_gymnasium,
 )
+
+_EVAL_NO_AUTO_GOAL_RESAMPLE_S = 1_000_000.0
 
 
 @dataclass
@@ -58,18 +59,19 @@ def _default_vecnorm_path(model_path: Path) -> Path:
 
 def _load_vec_env(
     env,
-    vecnorm_path: Optional[Path],
+    vecnorm_path: Path,
 ):
     vec_env = DummyVecEnv([lambda: env])
-    if vecnorm_path is not None and vecnorm_path.exists():
-        vec_env = VecNormalize.load(str(vecnorm_path), vec_env)
-        vec_env.training = False
-        vec_env.norm_reward = False
-        print(f"[eval] Loaded VecNormalize stats: {vecnorm_path}")
-    else:
-        if vecnorm_path is not None:
-            print(f"[eval] VecNormalize file not found: {vecnorm_path}")
-        print("[eval] Running without observation normalization.")
+    if not vecnorm_path.exists():
+        raise FileNotFoundError(
+            f"VecNormalize stats not found: '{vecnorm_path}'. "
+            "Evaluation must use the same normalization as training/video. "
+            "Pass --vecnorm explicitly or ensure <model>_vecnorm.pkl exists."
+        )
+    vec_env = VecNormalize.load(str(vecnorm_path), vec_env)
+    vec_env.training = False
+    vec_env.norm_reward = False
+    print(f"[eval] Loaded VecNormalize stats: {vecnorm_path}")
     return vec_env
 
 
@@ -143,7 +145,7 @@ def _parser() -> argparse.ArgumentParser:
         "--vecnorm",
         type=str,
         default=None,
-        help="Optional VecNormalize stats .pkl path. If omitted, auto-tries <model>_vecnorm.pkl.",
+        help="VecNormalize stats .pkl path. If omitted, uses <model>_vecnorm.pkl and errors if missing.",
     )
     p.add_argument("--cfg-name", type=str, default="ur3e_joint_pos_dense_stable")
     p.add_argument("--robot", type=str, default="ur3e", choices=["ur3e", "ur5e"])
@@ -189,6 +191,15 @@ def main() -> None:
     cfg.episode.seed = args.seed
     cfg.actions.control_variant = args.control_variant
     cfg.episode.time_limit = int(args.time_limit)
+    cfg.physics.obs_noise = 0.0
+    
+    # Evaluation should not change goals automatically.
+    cfg.commands.goal_resample_time_range_s = (
+        _EVAL_NO_AUTO_GOAL_RESAMPLE_S,
+        _EVAL_NO_AUTO_GOAL_RESAMPLE_S,
+    )
+    cfg.success.resample_on_success = False
+    cfg.success.terminate_on_success = False
 
     env = make_reach_manager_based_gymnasium(cfg)
     vec_env = _load_vec_env(env, vecnorm_path)
@@ -204,6 +215,7 @@ def main() -> None:
     print("P: pause/resume")
     print("Q or ESC: quit")
     print("Default: no timeout; reset manually with R")
+    print("Auto goal resampling: disabled (press G for new goal)")
     print("===========================\n")
 
     obs = vec_env.reset()

@@ -22,11 +22,12 @@ class ReachRewardCfg:
     position_error_weight: float = -0.2
     position_tanh_weight: float = 0.1
     position_tanh_std: float = 0.1
+    include_orientation: bool = True
     orientation_error_weight: float = -0.1
     include_action_rate: bool = True
-    action_rate_weight: float | WeightFn = rewards.action_rate_curriculum_weight
+    action_rate_weight: float | WeightFn = -0.0001
     include_joint_vel: bool = True
-    joint_vel_weight: float | WeightFn = rewards.joint_vel_curriculum_weight
+    joint_vel_weight: float | WeightFn = -0.0001
 
 
 def default_command_term() -> CommandTermCfg:
@@ -52,14 +53,14 @@ def default_reward_terms(
     cfg = reward_cfg or ReachRewardCfg()
 
     if abs(float(cfg.position_tanh_std) - 0.1) < 1e-12:
-        position_tanh_fn = rewards.position_error_tanh_std_01
+        position_tanh_fn = rewards.position_command_error_tanh
     else:
-        position_tanh_fn = rewards.position_error_tanh_with_std(cfg.position_tanh_std)
+        position_tanh_fn = rewards.position_command_error_tanh_with_std(cfg.position_tanh_std)
 
     terms: list[RewardTermCfg] = [
         RewardTermCfg(
             name="end_effector_position_tracking",
-            fn=rewards.position_error_l2,
+            fn=rewards.position_command_error,
             weight=float(cfg.position_error_weight),
         ),
         RewardTermCfg(
@@ -67,12 +68,17 @@ def default_reward_terms(
             fn=position_tanh_fn,
             weight=float(cfg.position_tanh_weight),
         ),
-        RewardTermCfg(
-            name="end_effector_orientation_tracking",
-            fn=rewards.orientation_error,
-            weight=float(cfg.orientation_error_weight),
-        ),
     ]
+
+    orientation_weight = float(cfg.orientation_error_weight)
+    if cfg.include_orientation or abs(orientation_weight) > 1e-12:
+        terms.append(
+            RewardTermCfg(
+                name="end_effector_orientation_tracking",
+                fn=rewards.orientation_command_error,
+                weight=orientation_weight,
+            )
+        )
 
     if cfg.include_action_rate:
         terms.append(

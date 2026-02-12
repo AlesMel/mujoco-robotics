@@ -16,7 +16,13 @@ def add_reach_train_args(
     control_variant_choices: Sequence[str] | None = None,
 ) -> None:
     """Attach reach-training args to an existing parser."""
-    parser.add_argument("--robot", type=str, default="ur3e", choices=["ur3e", "ur5e"])
+    parser.add_argument(
+        "--robot",
+        type=str,
+        default=None,
+        choices=["ur3e", "ur5e"],
+        help="Optional robot override for selected cfg profile.",
+    )
     parser.add_argument("--total-timesteps", type=int, default=default_total_timesteps)
     parser.add_argument("--n-envs", type=int, default=default_n_envs)
 
@@ -29,45 +35,45 @@ def add_reach_train_args(
     parser.add_argument(
         "--control-variant",
         type=str,
-        default="joint_pos",
+        default=None,
         help=cv_help,
         **cv_kwargs,
     )
     parser.add_argument(
         "--reach-threshold",
         type=float,
-        default=0.03,
-        help="Position tolerance for goal reached (metres, default: 0.03).",
+        default=None,
+        help="Optional override for position tolerance (metres).",
     )
     parser.add_argument(
         "--ori-threshold",
         type=float,
-        default=0.25,
-        help="Orientation tolerance for goal reached (radians, default: 0.25).",
+        default=None,
+        help="Optional override for orientation tolerance (radians).",
     )
     parser.add_argument(
         "--success-hold-steps",
         type=int,
-        default=10,
-        help="Consecutive success steps required to trigger hold-success.",
+        default=None,
+        help="Optional override for hold-success step count.",
     )
     parser.add_argument(
         "--success-bonus",
         type=float,
-        default=0.25,
-        help="One-time reward added when hold-success is first achieved.",
+        default=None,
+        help="Optional override for one-time hold-success bonus reward.",
     )
     parser.add_argument(
         "--stay-reward-weight",
         type=float,
-        default=0.05,
-        help="Per-second reward weight while hold-success is maintained.",
+        default=None,
+        help="Optional override for per-second stay reward weight.",
     )
     parser.add_argument(
         "--resample-on-success",
         action=argparse.BooleanOptionalAction,
-        default=False,
-        help="Resample goal immediately after first hold-success for current goal.",
+        default=None,
+        help="Optional override for goal resampling after hold-success.",
     )
     parser.add_argument("--save-video", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--save-video-every", type=int, default=50_000)

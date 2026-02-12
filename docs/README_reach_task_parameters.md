@@ -29,6 +29,8 @@ For quiet terminal output with only new-best updates:
 - use `train_reach.py` default `--callback-new-best-only`
 
 The reach training path is manager-based only and uses `--cfg-name`.
+If you omit `--robot`, `--control-variant`, and reward/threshold overrides, the
+selected profile (`--cfg-name`) is used as the single source of truth.
 
 ## 2) Main Reach Environment Parameters
 
@@ -49,13 +51,13 @@ The base defaults live in `src/mujoco_robot/envs/reach/reach_env_base.py`.
 
 Also in `src/mujoco_robot/envs/reach/reach_env_base.py`:
 
-- `actuator_kp` (default `250.0`): position-servo stiffness.
+- `actuator_kp` (default `100.0`): position-servo stiffness.
 - `min_joint_damping` (default `20.0`): passive damping floor.
 - `min_joint_frictionloss` (default `1.0`): passive friction floor.
 
 Lower `actuator_kp` and/or higher `min_joint_damping` reduce oscillation near goals.
 Joint-position profiles are pre-tuned now:
-- `ur3e_joint_pos*`: `actuator_kp=120.0`, `min_joint_damping=24.0`, `min_joint_frictionloss=1.2`, `joint_target_ema_alpha=0.35`
+- `ur3e_joint_pos*`: `actuator_kp=100.0`, `min_joint_damping=24.0`, `min_joint_frictionloss=1.2`, `joint_target_ema_alpha=1.0`
 - `ur5e_joint_pos*`: `actuator_kp=120.0`, `min_joint_damping=24.0`, `min_joint_frictionloss=1.2`, `joint_target_ema_alpha=0.35`
 
 `joint_target_ema_alpha` is an action-side smoothing factor for joint-position
@@ -131,11 +133,13 @@ python scripts/eval_reach.py \
   --control-variant joint_pos
 ```
 
-By default evaluation runs with `--time-limit 0` (no timeout), so episodes continue
-until task termination conditions are hit, and you reset manually.
+By default evaluation runs with `--time-limit 0` (no timeout), and goal
+resampling is fully manual. Use `G` for a new goal or `R` for a full reset.
 
-The evaluator auto-loads VecNormalize stats from:
-- `<model>_vecnorm.pkl` (for example `ppo_reach_ur3e_ur3e_joint_pos_dense_stable_vecnorm.pkl`)
+The evaluator requires VecNormalize stats to match training/video conditions:
+- default path: `<model>_vecnorm.pkl`
+- example: `ppo_reach_ur3e_ur3e_joint_pos_dense_stable_vecnorm.pkl`
+- if missing, evaluation exits with an error (pass `--vecnorm` to override path)
 
 Key controls during evaluation:
 - `G`: sample a new goal immediately

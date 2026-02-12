@@ -24,20 +24,13 @@ from typing import Dict, Iterable, Optional, Tuple
 import gymnasium
 import mujoco
 import numpy as np
-from PIL import Image, ImageDraw, ImageFont
 
 from mujoco_robot.robots.actuators import (
     configure_position_actuators,
     resolve_robot_actuators,
 )
 from mujoco_robot.robots.configs import get_robot_config
-from mujoco_robot.core.ik_controller import (
-    IKController,
-    orientation_error_axis_angle,
-    quat_error_magnitude,
-    quat_multiply,
-    quat_unique,
-)
+from mujoco_robot.core.ik_controller import IKController
 from mujoco_robot.core.collision import CollisionDetector
 from mujoco_robot.core.xml_builder import load_robot_xml, build_reach_xml
 from mujoco_robot.envs.manager_based import ManagerRuntime
@@ -51,6 +44,34 @@ from mujoco_robot.tasks.manager_based.manipulation.reach.mdp import (
     TerminationManager,
     make_default_reach_mdp_cfg,
 )
+from mujoco_robot.envs.reach.goals import (
+    goal_sampling_bounds,
+    maybe_resample_goal_by_timer,
+    resample_goal_after_success,
+    resample_goal_from_command,
+    sample_goal_position,
+    sample_goal_quaternion,
+)
+from mujoco_robot.envs.reach.kinematics import (
+    clamp_joint_targets,
+    desired_ee_absolute_pose,
+    desired_ee_relative_pose,
+    ee_goal_distance,
+    ee_quaternion,
+    ik_cartesian_joint_targets,
+    orientation_error_magnitude,
+    orientation_error_vector,
+)
+from mujoco_robot.envs.reach.rendering import (
+    compose_multi_camera_frame,
+    draw_metrics_overlay,
+)
+from mujoco_robot.envs.reach.resetting import (
+    initialize_goal_and_settle,
+    initialize_robot_state,
+    reset_episode_state,
+)
+from mujoco_robot.envs.reach.rewarding import compute_done_flags, compute_step_reward
 
 
 # ---------------------------------------------------------------------------
@@ -166,8 +187,8 @@ class URReachEnvBase:
 
     Reward (Isaac Lab reach manager cfg):
         ``-0.2 * position_error`` + ``0.1 * position_error_tanh(std=0.1)`` +
-        ``-0.1 * orientation_error`` + ``-w_ar * ||Δa||²`` + ``-w_jv * ||q̇||²``
-        where ``w_ar`` and ``w_jv`` follow the Isaac Lab curriculum schedule.
+        ``-0.1 * orientation_error`` +
+        ``-1e-4 * ||Δa||²`` + ``-1e-4 * ||q̇||²``.
     """
 
     # Subclasses may refine these; defaults assume 6-DOF action.
@@ -183,11 +204,14 @@ class URReachEnvBase:
         ori_step: float = 0.5,
         ori_abs_max: float = np.pi,
         joint_action_scale: float = 0.5,
-        reach_threshold: float = 0.001,  # meters
-        ori_threshold: float = 0.01,  # radians
+        reach_threshold: float = 0.01,  # meters
+        ori_threshold: float = 0.1,  # radians
         terminate_on_success: bool = False,
         terminate_on_collision: bool = False,
         goal_resample_time_range_s: Tuple[float, float] | None = None,
+        goal_roll_range: Tuple[float, float] = (0.0, 0.0),
+        goal_pitch_range: Tuple[float, float] = (0.0, 0.0),
+        goal_yaw_range: Tuple[float, float] = (-np.pi, np.pi),
         success_hold_steps: int = 10,
         success_bonus: float = 0.25,
         stay_reward_weight: float = 0.05,
@@ -197,7 +221,7 @@ class URReachEnvBase:
         joint_vel_weight: float = 0.0001,
         randomize_init: bool = True,
         init_q_range: Tuple[float, float] = (0.75, 1.25),
-        actuator_kp: float = 100.0,
+        actuator_kp: float = 500.0,
         min_joint_damping: float = 20.0,
         min_joint_frictionloss: float = 1.0,
         render_size: Tuple[int, int] = (960, 720),
@@ -260,7 +284,21 @@ class URReachEnvBase:
                     f"(min <= max), got {goal_resample_time_range_s}"
                 )
             self.goal_resample_time_range_s = (lo_s, hi_s)
-        # Curriculum targets (Isaac Lab style)
+
+        def _validate_angle_range(name: str, value: Tuple[float, float]) -> Tuple[float, float]:
+            lo_v = float(value[0])
+            hi_v = float(value[1])
+            if lo_v > hi_v:
+                raise ValueError(f"{name} must satisfy min <= max, got {value}")
+            return lo_v, hi_v
+
+        self.goal_roll_range = _validate_angle_range("goal_roll_range", goal_roll_range)
+        self.goal_pitch_range = _validate_angle_range("goal_pitch_range", goal_pitch_range)
+        self.goal_yaw_range = _validate_angle_range("goal_yaw_range", goal_yaw_range)
+        # Curriculum targets (Isaac Lab reach defaults):
+        # action_rate: -0.0001 -> -0.005 over 4500 steps
+        # joint_vel:   -0.0001 -> -0.001 over 4500 steps
+        # We keep positive magnitudes here; signs are applied in reward term helpers.
         self._action_rate_target = 0.005
         self._joint_vel_target = 0.001
         self._curriculum_steps = 4500
@@ -321,7 +359,11 @@ class URReachEnvBase:
         self.goal_geom = mujoco.mj_name2id(
             self.model, mujoco.mjtObj.mjOBJ_GEOM, "goal_cube"
         )
+        self._base_body_id = mujoco.mj_name2id(
+            self.model, mujoco.mjtObj.mjOBJ_BODY, "base"
+        )
         self._refresh_table_bounds()
+        self._center_top_camera_over_table()
 
         actuator_handles = resolve_robot_actuators(self.model, robot)
         self.robot_joints = list(actuator_handles.joint_names)
@@ -367,6 +409,9 @@ class URReachEnvBase:
         self._goal_hold_completed = False
         self._last_action = np.zeros(self.action_dim, dtype=np.float32)
         self._prev_action = np.zeros(self.action_dim, dtype=np.float32)
+        self._last_reward = 0.0
+        self._last_step_info: Dict = {}
+        self._last_obs: np.ndarray | None = None
 
         # Manager-based MDP composition (IsaacLab-style).
         self._mdp_cfg = self._resolve_mdp_cfg(mdp_cfg)
@@ -442,61 +487,12 @@ class URReachEnvBase:
     # -------------------------------------------------------------- Reset
     def reset(self, seed: Optional[int] = None) -> np.ndarray:
         """Reset the environment and return the initial observation."""
-        if seed is not None:
-            self._rng = np.random.default_rng(seed)
-
-        mujoco.mj_resetData(self.model, self.data)
-        self.step_id = 0
-        self._goals_reached = 0
-        self._goals_held = 0
-        self._goals_resampled = 0
-        self._prev_success = False
-        self._success_streak_steps = 0
-        self._goal_hold_completed = False
-        self._self_collision_count = 0
-        self._last_targets = self.init_q.copy()
-        self._last_action = np.zeros(self.action_dim, dtype=np.float32)
-        self._prev_action = np.zeros(self.action_dim, dtype=np.float32)
-
-        # Set robot to home pose (with optional Isaac Lab-style randomization)
-        self._total_episodes += 1
-        for qi, (jid, qpos_adr, dof_adr, act_id) in enumerate(
-            zip(
-                self._robot_joint_ids,
-                self._robot_qpos_ids,
-                self.robot_dofs,
-                self.robot_actuators,
-            )
-        ):
-            q_home = self.init_q[qi]
-            if self.randomize_init:
-                scale = float(self._rng.uniform(*self.init_q_range))
-                q_home = q_home * scale
-                lo, hi = self.model.jnt_range[jid]
-                if lo < hi:
-                    q_home = float(np.clip(q_home, lo, hi))
-            self.data.qpos[qpos_adr] = q_home
-            self.data.qvel[dof_adr] = 0.0
-            self.data.ctrl[act_id] = q_home
-        # Update last targets to match randomized start
-        for qi, qpos_adr in enumerate(self._robot_qpos_ids):
-            self._last_targets[qi] = self.data.qpos[qpos_adr]
-
-        mujoco.mj_forward(self.model, self.data)
-
-        # Store the home orientation for orientation curriculum
-        self._home_quat = self._ee_quat()
-
-        # Sample initial command through command manager.
-        self._manager("command").reset()
-        self._resample_goal()
-
-        for _ in range(self.settle_steps):
-            mujoco.mj_step(self.model, self.data)
-
-        self._init_dist = self._ee_goal_dist()
-        self._init_ori_err = self._orientation_error_magnitude()
-        return self._observe()
+        reset_episode_state(self, seed)
+        initialize_robot_state(self)
+        initialize_goal_and_settle(self)
+        obs = self._observe()
+        self._last_obs = obs.copy()
+        return obs
 
     # -------------------------------------------------------------- Goal sampling
     def _refresh_table_bounds(self) -> None:
@@ -520,100 +516,31 @@ class URReachEnvBase:
         ], dtype=float)
         self._table_top_z = float(pos[2] + size[2])
 
+    def _center_top_camera_over_table(self) -> None:
+        """Recenter the fixed `top` camera over the table footprint."""
+        if self._table_xy_bounds is None:
+            return
+        cam_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_CAMERA, "top")
+        if cam_id < 0:
+            return
+        table_center = np.array([
+            0.5 * (self._table_xy_bounds[0, 0] + self._table_xy_bounds[0, 1]),
+            0.5 * (self._table_xy_bounds[1, 0] + self._table_xy_bounds[1, 1]),
+        ], dtype=float)
+        self.model.cam_pos[cam_id, 0] = table_center[0]
+        self.model.cam_pos[cam_id, 1] = table_center[1]
+
     def _goal_sampling_bounds(self) -> tuple[tuple[float, float], tuple[float, float], tuple[float, float]]:
         """Goal XYZ sampling bounds, clipped to table footprint when available."""
-        x_lo, x_hi = float(self.goal_bounds[0, 0]), float(self.goal_bounds[0, 1])
-        y_lo, y_hi = float(self.goal_bounds[1, 0]), float(self.goal_bounds[1, 1])
-        z_lo, z_hi = float(self.goal_bounds[2, 0]), float(self.goal_bounds[2, 1])
-
-        if self._table_xy_bounds is not None:
-            x_lo = max(x_lo, float(self._table_xy_bounds[0, 0]) + self._table_spawn_margin_xy)
-            x_hi = min(x_hi, float(self._table_xy_bounds[0, 1]) - self._table_spawn_margin_xy)
-            y_lo = max(y_lo, float(self._table_xy_bounds[1, 0]) + self._table_spawn_margin_xy)
-            y_hi = min(y_hi, float(self._table_xy_bounds[1, 1]) - self._table_spawn_margin_xy)
-        if self._table_top_z is not None:
-            z_lo = max(z_lo, self._table_top_z + self._table_goal_z_margin)
-
-        # Keep ranges valid even for unusual custom robot/table setups.
-        if x_lo >= x_hi:
-            if self._table_xy_bounds is not None:
-                x_lo = float(self._table_xy_bounds[0, 0]) + 0.01
-                x_hi = float(self._table_xy_bounds[0, 1]) - 0.01
-            if x_lo >= x_hi:
-                x_lo, x_hi = float(self.goal_bounds[0, 0]), float(self.goal_bounds[0, 1])
-        if y_lo >= y_hi:
-            if self._table_xy_bounds is not None:
-                y_lo = float(self._table_xy_bounds[1, 0]) + 0.01
-                y_hi = float(self._table_xy_bounds[1, 1]) - 0.01
-            if y_lo >= y_hi:
-                y_lo, y_hi = float(self.goal_bounds[1, 0]), float(self.goal_bounds[1, 1])
-        if z_lo >= z_hi:
-            z_lo, z_hi = float(self.goal_bounds[2, 0]), float(self.goal_bounds[2, 1])
-            if z_lo >= z_hi:
-                z_mid = 0.5 * (z_lo + z_hi)
-                z_lo, z_hi = z_mid - 0.01, z_mid + 0.01
-
-        return (x_lo, x_hi), (y_lo, y_hi), (z_lo, z_hi)
+        return goal_sampling_bounds(self)
 
     def _sample_goal(self) -> np.ndarray:
         """Sample a random reachable goal position."""
-        cfg = get_robot_config(self.robot)
-        ee_pos = self.data.site_xpos[self.ee_site].copy()
-        min_base, max_base = cfg.goal_distance
-        min_height = cfg.goal_min_height
-        min_ee = cfg.goal_min_ee_dist
-        (x_lo, x_hi), (y_lo, y_hi), (z_lo, z_hi) = self._goal_sampling_bounds()
-        if self._table_top_z is not None:
-            min_height = max(min_height, self._table_top_z + self._table_goal_z_margin)
-
-        for _ in range(500):
-            goal = np.array([
-                self._rng.uniform(x_lo, x_hi),
-                self._rng.uniform(y_lo, y_hi),
-                self._rng.uniform(z_lo, z_hi),
-            ])
-            if goal[2] < min_height:
-                continue
-            dist_from_base = np.linalg.norm(goal - self._BASE_POS)
-            if dist_from_base < min_base or dist_from_base > max_base:
-                continue
-            if np.linalg.norm(goal - ee_pos) < min_ee:
-                continue
-            return goal
-        fallback = self._BASE_POS + np.array([0.25, 0.0, 0.30])
-        fallback[0] = float(np.clip(fallback[0], x_lo, x_hi))
-        fallback[1] = float(np.clip(fallback[1], y_lo, y_hi))
-        fallback[2] = float(np.clip(fallback[2], z_lo, z_hi))
-        return fallback
+        return sample_goal_position(self)
 
     def _sample_goal_quat(self) -> np.ndarray:
         """Sample a random goal orientation with curriculum."""
-        progress = min(1.0, self._total_episodes / max(1, self._ori_curriculum_steps))
-        max_angle = (
-            self._ori_curriculum_start
-            + (self._ori_curriculum_end - self._ori_curriculum_start) * progress
-        )
-
-        axis = self._rng.standard_normal(3)
-        norm = np.linalg.norm(axis)
-        if norm < 1e-8:
-            axis = np.array([0.0, 0.0, 1.0])
-        else:
-            axis = axis / norm
-
-        angle = self._rng.uniform(0, max_angle)
-
-        half = angle / 2.0
-        dq = np.array([
-            np.cos(half),
-            axis[0] * np.sin(half),
-            axis[1] * np.sin(half),
-            axis[2] * np.sin(half),
-        ])
-
-        home_quat = self._home_quat
-        goal_q = quat_multiply(dq, home_quat)
-        return quat_unique(goal_q)
+        return sample_goal_quaternion(self)
 
     def _place_goal_marker(self, pos: np.ndarray, quat: np.ndarray) -> None:
         """Move and rotate the goal marker to the desired pose."""
@@ -625,7 +552,7 @@ class URReachEnvBase:
     # -------------------------------------------------------------- IK + control helpers
     def _ee_quat(self) -> np.ndarray:
         """Current EE orientation as unit quaternion (w,x,y,z)."""
-        return self._ik.ee_quat()
+        return ee_quaternion(self)
 
     def _desired_ee_relative(
         self,
@@ -633,26 +560,7 @@ class URReachEnvBase:
         delta_ori: np.ndarray,
     ) -> tuple[np.ndarray, np.ndarray]:
         """Compute desired EE pose from **relative** Cartesian action."""
-        pos = self.data.site_xpos[self.ee_site].copy() + delta_xyz
-        for i in range(3):
-            pos[i] = float(np.clip(pos[i], self.ee_bounds[i, 0], self.ee_bounds[i, 1]))
-
-        current_quat = self._ee_quat()
-        angle = np.linalg.norm(delta_ori)
-        if angle > 1e-8:
-            axis = delta_ori / angle
-            half = angle / 2.0
-            dq = np.array([
-                np.cos(half),
-                axis[0] * np.sin(half),
-                axis[1] * np.sin(half),
-                axis[2] * np.sin(half),
-            ])
-            target_quat = quat_unique(quat_multiply(dq, current_quat))
-        else:
-            target_quat = current_quat
-
-        return pos, target_quat.copy()
+        return desired_ee_relative_pose(self, delta_xyz, delta_ori)
 
     def _desired_ee_absolute(self, action: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         """Compute desired EE pose from **absolute** Cartesian action.
@@ -662,55 +570,25 @@ class URReachEnvBase:
             - ``action[3:6]`` is an absolute axis-angle vector scaled by
               ``ori_abs_max`` and applied about ``_home_quat``.
         """
-        lo = self.ee_bounds[:, 0]
-        hi = self.ee_bounds[:, 1]
-        pos = lo + 0.5 * (action[:3] + 1.0) * (hi - lo)
-
-        aa = action[3:6] * self.ori_abs_max
-        angle = np.linalg.norm(aa)
-        if angle > self.ori_abs_max and angle > 1e-8:
-            aa = aa * (self.ori_abs_max / angle)
-            angle = self.ori_abs_max
-
-        if angle > 1e-8:
-            axis = aa / angle
-            half = angle / 2.0
-            dq = np.array([
-                np.cos(half),
-                axis[0] * np.sin(half),
-                axis[1] * np.sin(half),
-                axis[2] * np.sin(half),
-            ])
-            target_quat = quat_unique(quat_multiply(dq, self._home_quat))
-        else:
-            target_quat = self._home_quat.copy()
-
-        return pos.astype(float), target_quat
+        return desired_ee_absolute_pose(self, action)
 
     def _ik_cartesian(self, target_pos: np.ndarray, target_quat: np.ndarray) -> np.ndarray:
-        return self._ik.solve(target_pos, target_quat)
+        return ik_cartesian_joint_targets(self, target_pos, target_quat)
 
     def _clamp_to_limits(self, targets: np.ndarray) -> np.ndarray:
-        out = targets.copy()
-        for k, jid in enumerate(self._robot_joint_ids):
-            lo, hi = self.model.jnt_range[jid]
-            if lo < hi:
-                out[k] = float(np.clip(out[k], lo, hi))
-        return out
+        return clamp_joint_targets(self, targets)
 
     # -------------------------------------------------------------- Observation
     def _ee_goal_dist(self) -> float:
-        return float(np.linalg.norm(
-            self.data.site_xpos[self.ee_site] - self.goal_pos
-        ))
+        return ee_goal_distance(self)
 
     def _orientation_error(self) -> np.ndarray:
         """Axis-angle orientation error vector (3-D), from EE toward goal."""
-        return orientation_error_axis_angle(self._ee_quat(), self.goal_quat)
+        return orientation_error_vector(self)
 
     def _orientation_error_magnitude(self) -> float:
         """Scalar orientation error in radians ∈ [0, π]."""
-        return quat_error_magnitude(self._ee_quat(), self.goal_quat)
+        return orientation_error_magnitude(self)
 
     def _observe(self) -> np.ndarray:
         """Build observation vector from configured observation terms."""
@@ -734,29 +612,15 @@ class URReachEnvBase:
 
     def _resample_goal(self) -> None:
         """Apply the currently sampled command pose as the active goal."""
-        pose_command = self._manager("command").pose_command
-        self.goal_pos = pose_command[:3].astype(float)
-        self.goal_quat = quat_unique(pose_command[3:7].astype(float))
-        self._place_goal_marker(self.goal_pos, self.goal_quat)
-        self._success_streak_steps = 0
-        self._goal_hold_completed = False
+        resample_goal_from_command(self)
 
     def _maybe_resample_goal(self) -> tuple[bool, str]:
         """Advance command timer and resample when the sampled duration elapses."""
-        step_dt = self.model.opt.timestep * self.n_substeps
-        if not self._manager("command").step(step_dt):
-            return False, "none"
-
-        self._goals_resampled += 1
-        self._resample_goal()
-        return True, "timer"
+        return maybe_resample_goal_by_timer(self)
 
     def _resample_goal_after_success(self) -> tuple[bool, str]:
         """Resample command pose immediately after hold-success."""
-        self._manager("command").reset()
-        self._goals_resampled += 1
-        self._resample_goal()
-        return True, "success"
+        return resample_goal_after_success(self)
 
     def resample_goal_now(self) -> np.ndarray:
         """Force a new goal command immediately.
@@ -777,107 +641,11 @@ class URReachEnvBase:
         ori_err_mag: float,
     ) -> tuple[bool, bool, bool, bool, bool]:
         """Compute done flags via the configured termination manager."""
-        ctx = {"dist": float(dist), "ori_err": float(ori_err_mag)}
-        flags = self._manager("termination").compute(ctx)
-        return (
-            bool(flags["success"]),
-            bool(flags["failure"]),
-            bool(flags["terminated"]),
-            bool(flags["time_out"]),
-            bool(flags["done"]),
-        )
+        return compute_done_flags(self, dist, ori_err_mag)
 
     def _compute_reward(self) -> Tuple[float, bool, Dict]:
         """Compute reward and done flags from configured manager terms."""
-        # Keep goal snapshots so returned metrics stay consistent even if we
-        # resample the command pose at the end of this step.
-        goal_pos_step = self.goal_pos.copy()
-        goal_quat_step = self.goal_quat.copy()
-
-        dist = self._ee_goal_dist()
-        ori_err_mag = self._orientation_error_magnitude()
-        action_delta = self._last_action - self._prev_action
-        action_rate_l2 = float(np.dot(action_delta, action_delta))
-        joint_vel = self.data.qvel[self.robot_dofs]
-        joint_vel_l2 = float(np.dot(joint_vel, joint_vel))
-        ctx = {
-            "dist": dist,
-            "ori_err": ori_err_mag,
-            "action_rate_l2": action_rate_l2,
-            "joint_vel_l2": joint_vel_l2,
-        }
-
-        reward, raw_reward_terms, _weighted_terms = self._manager("reward").compute(ctx)
-
-        success, failure, terminated, time_up, done = self._compute_done_flags(dist, ori_err_mag)
-        if success and not self._prev_success:
-            self._goals_reached += 1
-        self._prev_success = success
-        if success:
-            self._success_streak_steps += 1
-        else:
-            self._success_streak_steps = 0
-
-        hold_success = bool(success and self._success_streak_steps >= self.success_hold_steps)
-        first_hold = bool(hold_success and not self._goal_hold_completed)
-        if first_hold:
-            self._goal_hold_completed = True
-            self._goals_held += 1
-
-        step_dt = float(self.model.opt.timestep * self.n_substeps)
-        stay_reward = float(self.stay_reward_weight * step_dt if hold_success else 0.0)
-        success_bonus = float(self.success_bonus if first_hold else 0.0)
-        reward = float(reward + stay_reward + success_bonus)
-        success_streak_steps = int(self._success_streak_steps)
-
-        goal_resampled = False
-        goal_resample_reason = "none"
-        if not done:
-            if self.resample_on_success and first_hold:
-                goal_resampled, goal_resample_reason = self._resample_goal_after_success()
-            else:
-                goal_resampled, goal_resample_reason = self._maybe_resample_goal()
-        command_manager = self._manager("command")
-
-        info = {
-            "dist": dist,
-            "ori_err": ori_err_mag,
-            "within_position_threshold": bool(dist < self.reach_threshold),
-            "within_orientation_threshold": bool(ori_err_mag < self.ori_threshold),
-            "success": success,
-            "hold_success": hold_success,
-            "first_hold_success": first_hold,
-            "success_streak_steps": success_streak_steps,
-            "success_hold_steps": self.success_hold_steps,
-            "success_bonus": success_bonus,
-            "stay_reward": stay_reward,
-            "failure": failure,
-            "terminated": terminated,
-            "time_out": time_up,
-            "goal_resample_elapsed_s": command_manager.elapsed_s,
-            "goal_resample_target_s": command_manager.target_s,
-            "goal_resampled": goal_resampled,
-            "goal_resample_reason": goal_resample_reason,
-            "goals_reached": self._goals_reached,
-            "goals_held": self._goals_held,
-            "goals_resampled": self._goals_resampled,
-            "self_collisions": self._self_collision_count,
-            "ee_pos": self.data.site_xpos[self.ee_site].copy(),
-            "ee_quat": self._ee_quat(),
-            # Goal used to compute this step's dist/orientation metrics.
-            "goal_pos": goal_pos_step,
-            "goal_quat": goal_quat_step,
-            # Active command after potential end-of-step resample.
-            "active_goal_pos": self.goal_pos.copy(),
-            "active_goal_quat": self.goal_quat.copy(),
-        }
-        if self._mdp_cfg.include_reward_terms_in_info:
-            reward_terms = dict(raw_reward_terms)
-            reward_terms["success_bonus"] = success_bonus
-            reward_terms["stay_reward"] = stay_reward
-            reward_terms["step_dt"] = step_dt
-            info["reward_terms"] = reward_terms
-        return float(reward), done, info
+        return compute_step_reward(self)
 
     # -------------------------------------------------------------- Action hook
     def _apply_action(self, action: np.ndarray) -> np.ndarray:
@@ -938,135 +706,42 @@ class URReachEnvBase:
         self._self_collision_count = self._collision_detector.count(self.data)
 
         reward, done, info = self._compute_reward()
+        self._last_reward = float(reward)
+        self._last_step_info = dict(info)
+        obs = self._observe()
+        self._last_obs = obs.copy()
         self.step_id += 1
-        return StepResult(self._observe(), reward, done, info)
+        return StepResult(obs, reward, done, info)
 
     # -------------------------------------------------------------- Render
-    def _draw_metrics_overlay(self, frame: np.ndarray) -> np.ndarray:
+    def _draw_metrics_overlay(
+        self,
+        frame: np.ndarray,
+        panel_x: int | None = None,
+        panel_y: int = 8,
+        panel_w: int | None = None,
+    ) -> np.ndarray:
         """Draw a translucent HUD with live metrics on the rendered frame.
 
         Metrics displayed:
         - Distance to target (m)
         - Orientation error (deg)
+        - Current reward
         - Per-joint angles (deg) and velocities (deg/s)
         - Step counter, goals reached, self-collisions
         """
-        h, w = frame.shape[:2]
-
-        # --- Gather metrics ---
-        dist = self._ee_goal_dist()
-        ori_err_rad = self._orientation_error_magnitude()
-        ori_err_deg = float(np.degrees(ori_err_rad))
-
-        joint_pos_rad = np.array(
-            [self.data.qpos[qid] for qid in self._robot_qpos_ids]
+        return draw_metrics_overlay(
+            self,
+            frame,
+            panel_x=panel_x,
+            panel_y=panel_y,
+            panel_w=panel_w,
         )
-        joint_vel_rad = self.data.qvel[self.robot_dofs]
-        joint_pos_deg = np.degrees(joint_pos_rad)
-        joint_vel_deg = np.degrees(joint_vel_rad)
-
-        ee_pos = self.data.site_xpos[self.ee_site].copy()
-
-        # --- Build text lines ---
-        lines: list[tuple[str, tuple[int, int, int]]] = []
-        # Header
-        lines.append((f"Step {self.step_id:>5d} / {self.time_limit}", (255, 255, 255)))
-        lines.append(("", (255, 255, 255)))  # spacer
-
-        # Distance: green when close, yellow mid, red far
-        if dist < self.reach_threshold:
-            dist_color = (0, 255, 0)
-        elif dist < self.reach_threshold * 5:
-            dist_color = (255, 255, 0)
-        else:
-            dist_color = (255, 100, 100)
-        lines.append((f"Distance:    {dist*100:6.2f} cm  ({dist:.4f} m)", dist_color))
-
-        # Orientation error: green < threshold, yellow mid, red far
-        if ori_err_rad < self.ori_threshold:
-            ori_color = (0, 255, 0)
-        elif ori_err_deg < 30.0:
-            ori_color = (255, 255, 0)
-        else:
-            ori_color = (255, 100, 100)
-        lines.append((f"Ori error:   {ori_err_deg:6.2f} deg ({ori_err_rad:.4f} rad)", ori_color))
-        lines.append(("", (255, 255, 255)))  # spacer
-
-        # EE position
-        lines.append((
-            f"EE pos:  x={ee_pos[0]:+.3f}  y={ee_pos[1]:+.3f}  z={ee_pos[2]:+.3f} m",
-            (200, 200, 255),
-        ))
-        lines.append((
-            f"Goal:    x={self.goal_pos[0]:+.3f}  y={self.goal_pos[1]:+.3f}  z={self.goal_pos[2]:+.3f} m",
-            (200, 255, 200),
-        ))
-        lines.append(("", (255, 255, 255)))  # spacer
-
-        # Joint statistics
-        lines.append(("Joint        Angle (deg)  Vel (deg/s)", (180, 180, 180)))
-        lines.append(("-" * 40, (100, 100, 100)))
-        for j in range(len(self.robot_joints)):
-            jname = self.robot_joints[j]
-            # Truncate long joint names for display
-            short = jname[-12:] if len(jname) > 12 else jname
-            lines.append((
-                f"{short:<12s} {joint_pos_deg[j]:+8.2f}     {joint_vel_deg[j]:+8.2f}",
-                (220, 220, 220),
-            ))
-        lines.append(("", (255, 255, 255)))  # spacer
-
-        # Episode stats
-        lines.append((f"Goals reached:    {self._goals_reached}", (180, 220, 255)))
-        lines.append((f"Goals held:       {self._goals_held}", (180, 220, 255)))
-        lines.append((f"Goals resampled:  {self._goals_resampled}", (180, 220, 255)))
-        lines.append((f"Self-collisions:  {self._self_collision_count}", (180, 220, 255)))
-
-        # --- Render text onto frame with PIL ---
-        img = Image.fromarray(frame)
-        draw = ImageDraw.Draw(img, "RGBA")
-
-        # Use a small monospaced-like font; fall back to default if needed.
-        try:
-            font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf", 13)
-        except (IOError, OSError):
-            try:
-                font = ImageFont.truetype("/usr/share/fonts/TTF/DejaVuSansMono.ttf", 13)
-            except (IOError, OSError):
-                font = ImageFont.load_default()
-
-        line_h = 16
-        pad = 6
-        panel_w = 340
-        panel_h = pad * 2 + line_h * len(lines)
-        panel_x = w - panel_w - 8
-        panel_y = 8
-
-        # Semi-transparent dark background
-        draw.rectangle(
-            [panel_x, panel_y, panel_x + panel_w, panel_y + panel_h],
-            fill=(0, 0, 0, 160),
-        )
-
-        y = panel_y + pad
-        for text, color in lines:
-            if text:
-                draw.text((panel_x + pad, y), text, fill=(*color, 255), font=font)
-            y += line_h
-
-        return np.array(img)
 
     def render(self, mode: str = "human") -> Optional[np.ndarray]:
         """Render the scene with an optional metrics overlay."""
         if mode == "rgb_array":
-            self._renderer_top.update_scene(self.data, camera="top")
-            frame_top = self._renderer_top.render()
-            self._renderer_side.update_scene(self.data, camera="side")
-            frame_side = self._renderer_side.render()
-            self._renderer_ee.update_scene(self.data, camera="ee_cam")
-            frame_ee = self._renderer_ee.render()
-            frame = np.concatenate([frame_top, frame_side, frame_ee], axis=1)
-            return self._draw_metrics_overlay(frame)
+            return compose_multi_camera_frame(self)
         return None
 
     def close(self) -> None:

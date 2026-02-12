@@ -6,6 +6,11 @@ from mujoco_robot.tasks.manager_based.manipulation.reach import (
     make_reach_manager_based_gymnasium,
     list_reach_cfgs,
 )
+from mujoco_robot.tasks.lift_suction import (
+    LiftSuctionTaskConfig,
+    make_lift_suction_env,
+    make_lift_suction_gymnasium,
+)
 from mujoco_robot.tasks.slot_sorter import (
     SlotSorterTaskConfig,
     make_slot_sorter_env,
@@ -37,6 +42,9 @@ __all__ = [
     "make_reach_manager_based_env",
     "make_reach_manager_based_gymnasium",
     "list_reach_cfgs",
+    "LiftSuctionTaskConfig",
+    "make_lift_suction_env",
+    "make_lift_suction_gymnasium",
     "SlotSorterTaskConfig",
     "make_slot_sorter_env",
     "make_slot_sorter_gymnasium",

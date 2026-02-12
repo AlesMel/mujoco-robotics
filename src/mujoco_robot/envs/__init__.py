@@ -27,6 +27,7 @@ from mujoco_robot.envs.reach import (
 
 # --- Slot sorter ---
 from mujoco_robot.envs.slot_sorter import URSlotSorterEnv, SlotSorterGymnasium
+from mujoco_robot.envs.lift_suction import URLiftSuctionEnv, LiftSuctionGymnasium
 
 __all__ = [
     # Base
@@ -46,4 +47,7 @@ __all__ = [
     # Slot sorter
     "URSlotSorterEnv",
     "SlotSorterGymnasium",
+    # Lift suction
+    "URLiftSuctionEnv",
+    "LiftSuctionGymnasium",
 ]

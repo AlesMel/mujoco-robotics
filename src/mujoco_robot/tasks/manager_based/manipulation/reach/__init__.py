@@ -26,16 +26,16 @@ def resolve_reach_env_cfg(cfg: ReachEnvCfg | str | None):
     return _impl(cfg)
 
 
-def make_reach_manager_based_env(cfg: ReachEnvCfg | str | None = None):
+def make_reach_manager_based_env(cfg: ReachEnvCfg | str | None = None, **kwargs):
     from .reach_env import make_reach_manager_based_env as _impl
 
-    return _impl(cfg)
+    return _impl(cfg, **kwargs)
 
 
-def make_reach_manager_based_gymnasium(cfg: ReachEnvCfg | str | None = None):
+def make_reach_manager_based_gymnasium(cfg: ReachEnvCfg | str | None = None, **kwargs):
     from .reach_env import make_reach_manager_based_gymnasium as _impl
 
-    return _impl(cfg)
+    return _impl(cfg, **kwargs)
 
 
 def __getattr__(name: str):
@@ -67,4 +67,3 @@ __all__ = [
     "get_reach_cfg",
     "list_reach_cfgs",
 ]
-

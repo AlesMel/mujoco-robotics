@@ -7,9 +7,12 @@ import pytest
 import gymnasium
 
 import mujoco_robot  # noqa: F401  # ensures Gym IDs are registered
+from mujoco_robot.envs.lift_suction import URLiftSuctionEnv as NewLiftSuctionEnv
+from mujoco_robot.envs.lift_suction_env import URLiftSuctionEnv as LegacyLiftSuctionEnv
 from mujoco_robot.envs.slot_sorter import URSlotSorterEnv as NewSlotSorterEnv
 from mujoco_robot.envs.slot_sorter_env import URSlotSorterEnv as LegacySlotSorterEnv
 from mujoco_robot.tasks import (
+    LiftSuctionTaskConfig,
     ReachEnvCfg,
     SlotSorterTaskConfig,
     get_task_spec,
@@ -23,11 +26,17 @@ def test_slot_sorter_shim_points_to_new_package() -> None:
     assert LegacySlotSorterEnv is NewSlotSorterEnv
 
 
+def test_lift_suction_shim_points_to_new_package() -> None:
+    """Legacy lift-suction import should still point to the same class."""
+    assert LegacyLiftSuctionEnv is NewLiftSuctionEnv
+
+
 def test_task_registry_lists_builtin_tasks() -> None:
-    """Registry should expose both core tasks."""
+    """Registry should expose all core tasks."""
     names = list_tasks()
     assert "reach" in names
     assert "slot_sorter" in names
+    assert "lift_suction" in names
 
 
 def test_get_task_spec_unknown_raises() -> None:
@@ -102,6 +111,33 @@ def test_make_slot_sorter_task_raw_smoke() -> None:
 def test_slot_sorter_gym_registration_smoke() -> None:
     """Registered slot-sorter Gym ID should construct and step."""
     env = gymnasium.make("MuJoCoRobot/Slot-Sorter-v0")
+    obs, _ = env.reset(seed=0)
+    assert obs.shape == env.observation_space.shape
+
+    obs2, _reward, _terminated, _truncated, _info = env.step(
+        env.action_space.sample()
+    )
+    assert obs2.shape == env.observation_space.shape
+    env.close()
+
+
+def test_make_lift_suction_task_raw_smoke() -> None:
+    """Lift-suction task factory should build a working raw environment."""
+    env = make_task(
+        "lift_suction",
+        config=LiftSuctionTaskConfig(time_limit=2, seed=0),
+    )
+    obs = env.reset(seed=0)
+    assert obs.shape == (env.observation_dim,)
+
+    step = env.step(np.zeros(env.action_dim, dtype=np.float32))
+    assert step.obs.shape == (env.observation_dim,)
+    env.close()
+
+
+def test_lift_suction_gym_registration_smoke() -> None:
+    """Registered lift-suction Gym ID should construct and step."""
+    env = gymnasium.make("MuJoCoRobot/Lift-Suction-v0")
     obs, _ = env.reset(seed=0)
     assert obs.shape == env.observation_space.shape
 

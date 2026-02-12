@@ -13,6 +13,7 @@ Or from Python::
 from __future__ import annotations
 
 import argparse
+import torch.nn as nn
 
 from stable_baselines3 import PPO
 from stable_baselines3.common.monitor import Monitor
@@ -32,20 +33,20 @@ from mujoco_robot.training.reach_cli import (
 
 
 def train_reach_ppo(
-    robot: str = "ur3e",
+    robot: str | None = None,
     total_timesteps: int = 10_000_000,
     n_envs: int = 16,
     log_dir: str = "runs",
     log_name: str = "reach_ppo",
     save_video: bool = True,
     save_video_every: int = 50_000,
-    control_variant: str = "joint_pos",
-    reach_threshold: float = 0.03,
-    ori_threshold: float = 0.25,
-    success_hold_steps: int = 10,
-    success_bonus: float = 0.25,
-    stay_reward_weight: float = 0.05,
-    resample_on_success: bool = False,
+    control_variant: str | None = None,
+    reach_threshold: float | None = None,
+    ori_threshold: float | None = None,
+    success_hold_steps: int | None = None,
+    success_bonus: float | None = None,
+    stay_reward_weight: float | None = None,
+    resample_on_success: bool | None = None,
     progress_bar: bool = True,
     sb3_verbose: int = 0,
     callback_new_best_only: bool = True,
@@ -56,31 +57,43 @@ def train_reach_ppo(
 
     def build_cfg(seed: int | None, render_mode: str | None):
         cfg = get_reach_cfg(profile_name)
-        cfg.scene.robot = robot
+        if robot is not None:
+            cfg.scene.robot = robot
         cfg.scene.render_mode = render_mode
         cfg.episode.seed = seed
-        cfg.actions.control_variant = control_variant
-        cfg.success.reach_threshold = reach_threshold
-        cfg.success.ori_threshold = ori_threshold
-        cfg.success.success_hold_steps = success_hold_steps
-        cfg.success.success_bonus = success_bonus
-        cfg.success.stay_reward_weight = stay_reward_weight
-        cfg.success.resample_on_success = resample_on_success
+        if control_variant is not None:
+            cfg.actions.control_variant = control_variant
+        if reach_threshold is not None:
+            cfg.success.reach_threshold = reach_threshold
+        if ori_threshold is not None:
+            cfg.success.ori_threshold = ori_threshold
+        if success_hold_steps is not None:
+            cfg.success.success_hold_steps = success_hold_steps
+        if success_bonus is not None:
+            cfg.success.success_bonus = success_bonus
+        if stay_reward_weight is not None:
+            cfg.success.stay_reward_weight = stay_reward_weight
+        if resample_on_success is not None:
+            cfg.success.resample_on_success = resample_on_success
         return cfg
+
+    preview_cfg = build_cfg(seed=0, render_mode=None)
 
     print(f"\n{'='*50}")
     print("  Reach training config")
     print(f"  Config profile:   {profile_name}")
-    print(f"  Robot:            {robot}")
-    print(f"  Control variant:  {control_variant}")
-    print(f"  Reach threshold:  {reach_threshold:.3f} m")
-    print(f"  Ori threshold:    {ori_threshold:.2f} rad")
-    print(f"  Hold steps:       {success_hold_steps}")
-    print(f"  Success bonus:    {success_bonus:.3f}")
-    print(f"  Stay reward w:    {stay_reward_weight:.3f} /s")
-    print(f"  Resample success: {resample_on_success}")
+    print(f"  Robot:            {preview_cfg.scene.robot}")
+    print(f"  Control variant:  {preview_cfg.actions.control_variant}")
+    print(f"  Reach threshold:  {preview_cfg.success.reach_threshold:.3f} m")
+    print(f"  Ori threshold:    {preview_cfg.success.ori_threshold:.2f} rad")
+    print(f"  Hold steps:       {preview_cfg.success.success_hold_steps}")
+    print(f"  Success bonus:    {preview_cfg.success.success_bonus:.3f}")
+    print(f"  Stay reward w:    {preview_cfg.success.stay_reward_weight:.3f} /s")
+    print(f"  Resample success: {preview_cfg.success.resample_on_success}")
+    print(f"  Train obs noise:  {preview_cfg.physics.obs_noise:.4f}")
+    print("  Video obs noise:  0.0000")
     print(f"  Progress bar:     {progress_bar}")
-    if control_variant == "joint_pos_isaac_reward":
+    if preview_cfg.actions.control_variant == "joint_pos_isaac_reward":
         print("  Episode setup:    built-in defaults (12s, no in-episode goal resample)")
     print(f"  Total timesteps:  {total_timesteps:,}")
     print(f"{'='*50}\n")
@@ -95,12 +108,14 @@ def train_reach_ppo(
     vec_env = SubprocVecEnv([make_env(i) for i in range(n_envs)])
     vec_env = VecNormalize(vec_env, norm_obs=True, norm_reward=True, clip_obs=10.0)
 
-    env_name = f"reach_{robot}_{cfg_name}".replace("/", "_")
+    env_name = f"reach_{preview_cfg.scene.robot}_{cfg_name}".replace("/", "_")
     callbacks = []
     if save_video:
 
         def make_eval_env():
             cfg = build_cfg(seed=0, render_mode="rgb_array")
+            # Keep policy-evaluation videos noise-free for stable diagnostics.
+            cfg.physics.obs_noise = 0.0
             return Monitor(make_reach_manager_based_gymnasium(cfg))
 
         video_cb = BestEpisodeVideoCallback(
@@ -115,7 +130,7 @@ def train_reach_ppo(
         )
         callbacks.append(video_cb)
 
-    n_steps = 2048
+    n_steps = 1024
     n_minibatches = 4
     batch_size = (n_steps * n_envs) // n_minibatches
 
@@ -137,12 +152,14 @@ def train_reach_ppo(
         verbose=sb3_verbose,
         tensorboard_log=log_dir,
     )
+
     model.learn(
         total_timesteps=total_timesteps,
         callback=callbacks if callbacks else None,
         tb_log_name=log_name,
         progress_bar=progress_bar,
     )
+
     model_path = f"ppo_{env_name}"
     model.save(model_path)
     vec_norm_path = f"{model_path}_vecnorm.pkl"
@@ -155,7 +172,7 @@ def main():
     p = argparse.ArgumentParser(description="Train PPO on manager-based reach.")
     add_reach_train_args(
         p,
-        default_total_timesteps=500_000,
+        default_total_timesteps=10_000_000,
         default_n_envs=16,
         control_variant_choices=sorted(REACH_VARIANTS.keys()),
     )

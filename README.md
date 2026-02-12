@@ -36,7 +36,8 @@ src/mujoco_robot/
 │   │   └── reach_env_joint_pos_isaac_reward.py
 │   ├── slot_sorter/
 │   │   └── slot_sorter_env.py
-│   └── slot_sorter_env.py          # Backward-compatible slot-sorter shim
+│   ├── slot_sorter_env.py          # Backward-compatible slot-sorter shim
+│   └── lift_suction_env.py         # Backward-compatible lift-suction shim
 ├── tasks/
 │   ├── manager_based/
 │   │   └── manipulation/reach/     # Reach cfgs + manager-based runtime + MDP terms
@@ -46,6 +47,11 @@ src/mujoco_robot/
 ├── teleop/
 └── scripts/
 ```
+
+Compatibility shims (`mujoco_robot.envs.slot_sorter_env`,
+`mujoco_robot.envs.lift_suction_env`) are deprecated and planned for removal in
+`v0.4.0`. Prefer package paths under `mujoco_robot.envs.slot_sorter` and
+`mujoco_robot.envs.lift_suction`.
 
 ---
 
@@ -133,6 +139,9 @@ The GUI provides:
 # Reach task (UR3e, IK-relative)
 python -m mujoco_robot.scripts.train --task reach --robot ur3e --control-variant ik_rel --total-timesteps 500000
 
+# Reach task (cfg-first; profile is the default source of truth)
+python -m mujoco_robot.scripts.train --task reach --cfg-name ur3e_joint_pos_dense_stable --total-timesteps 500000
+
 # Reach task (other control variants)
 python -m mujoco_robot.scripts.train --task reach --robot ur3e --control-variant ik_abs --total-timesteps 500000
 python -m mujoco_robot.scripts.train --task reach --robot ur3e --control-variant joint_pos --total-timesteps 500000
@@ -167,6 +176,25 @@ Controls in the viewer:
 - `R` reset episode
 - `P` pause/resume
 - `Q` / `ESC` quit
+
+### 4c. Interactive lift-suction evaluation
+
+```bash
+python scripts/eval_lift_suction.py
+# or (after pip install -e .):
+mr-eval-lift-suction
+```
+
+Controls in the viewer:
+- `W/S` +/-Y
+- `A/D` +/-X
+- `R/F` +/-Z
+- `Q/E` +/-yaw
+- `SPACE` suction on/off
+- `X` stop action
+- `T` reset episode
+- `P` pause/resume
+- `Z` / `ESC` quit
 
 ### 5. Use as a Python library
 

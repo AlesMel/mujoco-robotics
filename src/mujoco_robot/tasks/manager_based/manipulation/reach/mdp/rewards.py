@@ -4,11 +4,11 @@ from __future__ import annotations
 import math
 
 
-def position_error_l2(_env, ctx: dict[str, float]) -> float:
+def position_command_error(_env, ctx: dict[str, float]) -> float:
     return float(ctx["dist"])
 
 
-def position_error_tanh(_env, ctx: dict[str, float], std: float = 0.1) -> float:
+def position_command_error_tanh(_env, ctx: dict[str, float], std: float = 0.1) -> float:
     return float(1.0 - math.tanh(ctx["dist"] / std))
 
 
@@ -16,19 +16,23 @@ def orientation_error(_env, ctx: dict[str, float]) -> float:
     return float(ctx["ori_err"])
 
 
+def orientation_command_error(_env, ctx: dict[str, float]) -> float:
+    return float(ctx["ori_err"])
+
+
 def orientation_error_tanh(_env, ctx: dict[str, float], std: float = 0.2) -> float:
     return float(1.0 - math.tanh(ctx["ori_err"] / std))
 
 
-def position_error_tanh_std_01(env, ctx: dict[str, float]) -> float:
-    return position_error_tanh(env, ctx, std=0.1)
+def position_command_error_tanh_std_01(env, ctx: dict[str, float]) -> float:
+    return position_command_error_tanh(env, ctx, std=0.1)
 
 
-def position_error_tanh_with_std(std: float):
+def position_command_error_tanh_with_std(std: float):
     """Return a position tanh reward function with custom std."""
 
     def _fn(env, ctx: dict[str, float]) -> float:
-        return position_error_tanh(env, ctx, std=float(std))
+        return position_command_error_tanh(env, ctx, std=float(std))
 
     return _fn
 
@@ -65,3 +69,20 @@ def scaled_by_step_dt(base_weight: float):
         return float(base_weight * env.model.opt.timestep * env.n_substeps)
 
     return _weight
+
+
+# Backward-compatible aliases for older naming.
+def position_error_l2(env, ctx: dict[str, float]) -> float:
+    return position_command_error(env, ctx)
+
+
+def position_error_tanh(env, ctx: dict[str, float], std: float = 0.1) -> float:
+    return position_command_error_tanh(env, ctx, std=std)
+
+
+def position_error_tanh_std_01(env, ctx: dict[str, float]) -> float:
+    return position_command_error_tanh_std_01(env, ctx)
+
+
+def position_error_tanh_with_std(std: float):
+    return position_command_error_tanh_with_std(std)

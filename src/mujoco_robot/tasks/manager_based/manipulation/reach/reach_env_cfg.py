@@ -41,14 +41,17 @@ class CommandCfg:
     """Goal command sampling settings."""
 
     goal_resample_time_range_s: tuple[float, float] | None = None
+    goal_roll_range: tuple[float, float] = (0.0, 0.0)
+    goal_pitch_range: tuple[float, float] = (0.0, 0.0)
+    goal_yaw_range: tuple[float, float] = (-3.141592653589793, 3.141592653589793)
 
 
 @dataclass
 class SuccessCfg:
     """Goal thresholds and hold/resampling policy."""
 
-    reach_threshold: float = 0.001
-    ori_threshold: float = 0.01
+    reach_threshold: float = 0.1
+    ori_threshold: float = 0.1
     terminate_on_success: bool = False
     terminate_on_collision: bool = False
     success_hold_steps: int = 10
@@ -131,6 +134,9 @@ class ReachEnvCfg:
 
         if self.commands.goal_resample_time_range_s is not None:
             kwargs["goal_resample_time_range_s"] = self.commands.goal_resample_time_range_s
+        kwargs["goal_roll_range"] = self.commands.goal_roll_range
+        kwargs["goal_pitch_range"] = self.commands.goal_pitch_range
+        kwargs["goal_yaw_range"] = self.commands.goal_yaw_range
 
         if self.managers.mdp_cfg is not None:
             kwargs["mdp_cfg"] = self.managers.mdp_cfg

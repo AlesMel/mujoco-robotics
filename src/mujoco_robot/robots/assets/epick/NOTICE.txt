@@ -1,0 +1,12 @@
+EPick mesh source
+=================
+
+This directory includes `epick_body.stl` sourced from:
+https://github.com/PickNikRobotics/ros2_epick_gripper
+
+Path in source repository:
+`epick_description/meshes/visual/epick_body.stl`
+
+Upstream license:
+BSD 3-Clause License (see repository `LICENSE`).
+

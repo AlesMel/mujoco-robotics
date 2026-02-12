@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+from typing import Any
 
 import gymnasium
 import numpy as np
@@ -22,6 +23,96 @@ def resolve_reach_env_cfg(cfg: ReachEnvCfg | str | None) -> ReachEnvCfg:
     if isinstance(cfg, str):
         return get_reach_cfg(cfg)
     return cfg
+
+
+def _apply_legacy_overrides(
+    cfg: ReachEnvCfg,
+    overrides: dict[str, Any],
+) -> tuple[ReachEnvCfg, dict[str, Any]]:
+    """Apply legacy kwargs onto cfg and return passthrough kwargs.
+
+    ``passthrough`` contains kwargs not represented in :class:`ReachEnvCfg`
+    that should be forwarded to :class:`URReachEnvBase`.
+    """
+    out = copy.deepcopy(cfg)
+    passthrough: dict[str, Any] = {}
+
+    for key, value in overrides.items():
+        if value is None:
+            continue
+
+        if key == "robot":
+            out.scene.robot = str(value)
+        elif key == "render_mode":
+            out.scene.render_mode = value
+        elif key == "render_size":
+            out.scene.render_size = tuple(value)
+        elif key == "time_limit":
+            out.episode.time_limit = int(value)
+        elif key == "seed":
+            out.episode.seed = int(value)
+        elif key == "control_variant":
+            out.actions.control_variant = str(value)
+        elif key == "ee_step":
+            out.actions.ee_step = float(value)
+        elif key == "ori_step":
+            out.actions.ori_step = float(value)
+        elif key == "ori_abs_max":
+            out.actions.ori_abs_max = float(value)
+        elif key == "joint_action_scale":
+            out.actions.joint_action_scale = float(value)
+        elif key == "joint_target_ema_alpha":
+            out.actions.joint_target_ema_alpha = float(value)
+        elif key == "goal_resample_time_range_s":
+            out.commands.goal_resample_time_range_s = tuple(value)
+        elif key == "goal_roll_range":
+            out.commands.goal_roll_range = tuple(value)
+        elif key == "goal_pitch_range":
+            out.commands.goal_pitch_range = tuple(value)
+        elif key == "goal_yaw_range":
+            out.commands.goal_yaw_range = tuple(value)
+        elif key == "reach_threshold":
+            out.success.reach_threshold = float(value)
+        elif key == "ori_threshold":
+            out.success.ori_threshold = float(value)
+        elif key == "terminate_on_success":
+            out.success.terminate_on_success = bool(value)
+        elif key == "terminate_on_collision":
+            out.success.terminate_on_collision = bool(value)
+        elif key == "success_hold_steps":
+            out.success.success_hold_steps = int(value)
+        elif key == "success_bonus":
+            out.success.success_bonus = float(value)
+        elif key == "stay_reward_weight":
+            out.success.stay_reward_weight = float(value)
+        elif key == "resample_on_success":
+            out.success.resample_on_success = bool(value)
+        elif key == "randomize_init":
+            out.randomization.randomize_init = bool(value)
+        elif key == "init_q_range":
+            out.randomization.init_q_range = tuple(value)
+        elif key == "actuator_kp":
+            out.physics.actuator_kp = float(value)
+        elif key == "min_joint_damping":
+            out.physics.min_joint_damping = float(value)
+        elif key == "min_joint_frictionloss":
+            out.physics.min_joint_frictionloss = float(value)
+        elif key == "obs_noise":
+            out.physics.obs_noise = float(value)
+        elif key == "action_rate_weight":
+            out.physics.action_rate_weight = float(value)
+        elif key == "joint_vel_weight":
+            out.physics.joint_vel_weight = float(value)
+        elif key == "mdp_cfg":
+            out.managers.mdp_cfg = value
+        elif key == "reward_cfg":
+            out.managers.reward_cfg = value
+        elif key == "model_path":
+            passthrough[key] = value
+        else:
+            raise TypeError(f"Unexpected reach env kwarg: '{key}'")
+
+    return out, passthrough
 
 
 def _action_term_for_variant(control_variant: str):
@@ -56,14 +147,19 @@ def _build_runtime_mdp_cfg(cfg: ReachEnvCfg) -> ReachMDPCfg:
 class ReachManagerBasedEnv(URReachEnvBase, ManagerBasedEnv):
     """Raw manager-based reach env backed by shared manager runtime."""
 
-    # Keep joint-position action behavior aligned with legacy joint-pos env.
+    # Optional smoothing for IsaacLab-style default-offset joint targets.
     _ema_alpha: float = 1.0
 
-    def __init__(self, cfg: ReachEnvCfg | str | None = None):
-        resolved = resolve_reach_env_cfg(cfg)
+    def __init__(self, cfg: ReachEnvCfg | str | None = None, **legacy_overrides: Any):
+        cfg_alias = legacy_overrides.pop("cfg_name", None)
+        if cfg is not None and cfg_alias is not None:
+            raise TypeError("Pass only one of `cfg` or `cfg_name`.")
+        resolved = resolve_reach_env_cfg(cfg_alias if cfg is None else cfg)
+        resolved, passthrough = _apply_legacy_overrides(resolved, legacy_overrides)
         ManagerBasedEnv.__init__(self, cfg=resolved)
         kwargs = resolved.to_legacy_kwargs()
         kwargs["mdp_cfg"] = _build_runtime_mdp_cfg(resolved)
+        kwargs.update(passthrough)
         super().__init__(robot=resolved.scene.robot, **kwargs)
         if resolved.actions.control_variant in {"joint_pos", "joint_pos_isaac_reward"}:
             alpha = float(resolved.actions.joint_target_ema_alpha)
@@ -82,9 +178,10 @@ class ReachManagerBasedEnv(URReachEnvBase, ManagerBasedEnv):
 
 def make_reach_manager_based_env(
     cfg: ReachEnvCfg | str | None = None,
+    **legacy_overrides: Any,
 ) -> ReachManagerBasedEnv:
     """Create raw reach env from manager-based cfg."""
-    return ReachManagerBasedEnv(cfg)
+    return ReachManagerBasedEnv(cfg, **legacy_overrides)
 
 
 class ReachManagerBasedRLEnv(ManagerBasedRLEnv):
@@ -92,15 +189,19 @@ class ReachManagerBasedRLEnv(ManagerBasedRLEnv):
 
     metadata = {"render_modes": ["rgb_array"]}
 
-    def __init__(self, cfg: ReachEnvCfg | str | None = None):
-        resolved = resolve_reach_env_cfg(cfg)
+    def __init__(self, cfg: ReachEnvCfg | str | None = None, **legacy_overrides: Any):
+        cfg_alias = legacy_overrides.pop("cfg_name", None)
+        if cfg is not None and cfg_alias is not None:
+            raise TypeError("Pass only one of `cfg` or `cfg_name`.")
+        resolved = resolve_reach_env_cfg(cfg_alias if cfg is None else cfg)
+        resolved, passthrough = _apply_legacy_overrides(resolved, legacy_overrides)
         super().__init__(cfg=resolved)
         self.render_mode = resolved.scene.render_mode
 
         env_cfg = copy.deepcopy(resolved)
         high_res = self.render_mode == "rgb_array"
         env_cfg.scene.render_size = (640, 480) if high_res else (160, 120)
-        self.base = ReachManagerBasedEnv(env_cfg)
+        self.base = ReachManagerBasedEnv(env_cfg, **passthrough)
 
         self.action_space = gymnasium.spaces.Box(
             -1.0, 1.0, shape=(self.base.action_dim,), dtype=np.float32
@@ -133,6 +234,7 @@ class ReachManagerBasedRLEnv(ManagerBasedRLEnv):
 
 def make_reach_manager_based_gymnasium(
     cfg: ReachEnvCfg | str | None = None,
+    **legacy_overrides: Any,
 ) -> ReachManagerBasedRLEnv:
     """Create Gymnasium reach env from manager-based cfg."""
-    return ReachManagerBasedRLEnv(cfg)
+    return ReachManagerBasedRLEnv(cfg, **legacy_overrides)

@@ -1,7 +1,9 @@
 <mujoco model="ur3e">
   <!--
-    UR3e model using UR5e visual meshes (same e-series design family)
-    scaled to match the UR3e kinematics.
+    UR3e model with native UR3e visual meshes (OBJ) converted from the
+    official ROS-Industrial DAE description.
+    Source: github.com/ros-industrial/universal_robot (kinetic-devel)
+    License: BSD-3-Clause (ROS Industrial Consortium).
 
     Body/joint/site/actuator names follow the project convention
     (see core/collision.py, envs/*.py).
@@ -10,7 +12,7 @@
       d1 = 0.15185 m   a2 = 0.24355 m   a3 = 0.2132 m
       d4 = 0.13105 m   d5 = 0.08535 m   d6 = 0.0921 m
   -->
-  <compiler angle="radian" meshdir="assets/ur5e" autolimits="true"/>
+  <compiler angle="radian" meshdir="assets/ur3e" autolimits="true"/>
   <option timestep="0.002" gravity="0 0 -9.81" integrator="implicitfast"/>
 
   <visual>
@@ -63,32 +65,28 @@
     <material class="ur3e" name="linkgray"  rgba="0.82  0.82  0.82  1"/>
     <material class="ur3e" name="urblue"    rgba="0.49  0.678 0.8   1"/>
 
-    <!--
-      Reuse UR5e meshes with per-link scale factors derived from DH ratios.
-      Radial (XY) = shoulder_offset_3e / shoulder_offset_5e = 0.120/0.138 ≈ 0.87
-      Length (Z)  = link_length_3e / link_length_5e per link
-      Wrist = d5_3e / d5_5e = 0.08535/0.0997 ≈ 0.856 uniform
-    -->
-    <mesh name="base_0"       file="base_0.obj"       scale="0.87 0.87 0.934"/>
-    <mesh name="base_1"       file="base_1.obj"       scale="0.87 0.87 0.934"/>
-    <mesh name="shoulder_0"   file="shoulder_0.obj"    scale="0.87 0.87 0.87"/>
-    <mesh name="shoulder_1"   file="shoulder_1.obj"    scale="0.87 0.87 0.87"/>
-    <mesh name="shoulder_2"   file="shoulder_2.obj"    scale="0.87 0.87 0.87"/>
-    <mesh name="upperarm_0"   file="upperarm_0.obj"    scale="0.87 0.87 0.573"/>
-    <mesh name="upperarm_1"   file="upperarm_1.obj"    scale="0.87 0.87 0.573"/>
-    <mesh name="upperarm_2"   file="upperarm_2.obj"    scale="0.87 0.87 0.573"/>
-    <mesh name="upperarm_3"   file="upperarm_3.obj"    scale="0.87 0.87 0.573"/>
-    <mesh name="forearm_0"    file="forearm_0.obj"     scale="0.87 0.87 0.544"/>
-    <mesh name="forearm_1"    file="forearm_1.obj"     scale="0.87 0.87 0.544"/>
-    <mesh name="forearm_2"    file="forearm_2.obj"     scale="0.87 0.87 0.544"/>
-    <mesh name="forearm_3"    file="forearm_3.obj"     scale="0.87 0.87 0.544"/>
-    <mesh name="wrist1_0"     file="wrist1_0.obj"      scale="0.856 0.856 0.856"/>
-    <mesh name="wrist1_1"     file="wrist1_1.obj"      scale="0.856 0.856 0.856"/>
-    <mesh name="wrist1_2"     file="wrist1_2.obj"      scale="0.856 0.856 0.856"/>
-    <mesh name="wrist2_0"     file="wrist2_0.obj"      scale="0.856 0.856 0.856"/>
-    <mesh name="wrist2_1"     file="wrist2_1.obj"      scale="0.856 0.856 0.856"/>
-    <mesh name="wrist2_2"     file="wrist2_2.obj"      scale="0.856 0.856 0.856"/>
-    <mesh name="wrist3"       file="wrist3.obj"        scale="0.856 0.856 0.925"/>
+    <!-- Native UR3e visual meshes (OBJ from ROS-Industrial DAE,
+         converted with mm→m scale + Y-up→Z-up axis transform) -->
+    <mesh file="base_0.obj"/>
+    <mesh file="base_1.obj"/>
+    <mesh file="shoulder_0.obj"/>
+    <mesh file="shoulder_1.obj"/>
+    <mesh file="shoulder_2.obj"/>
+    <mesh file="upperarm_0.obj"/>
+    <mesh file="upperarm_1.obj"/>
+    <mesh file="upperarm_2.obj"/>
+    <mesh file="upperarm_3.obj"/>
+    <mesh file="forearm_0.obj"/>
+    <mesh file="forearm_1.obj"/>
+    <mesh file="forearm_2.obj"/>
+    <mesh file="forearm_3.obj"/>
+    <mesh file="wrist1_0.obj"/>
+    <mesh file="wrist1_1.obj"/>
+    <mesh file="wrist1_2.obj"/>
+    <mesh file="wrist2_0.obj"/>
+    <mesh file="wrist2_1.obj"/>
+    <mesh file="wrist2_2.obj"/>
+    <mesh file="wrist3.obj"/>
   </asset>
 
   <worldbody>
@@ -110,7 +108,7 @@
 
     <!-- ================= UR3e Robot ================= -->
     <!-- d1 = 0.15185 (vs UR5e 0.163) -->
-    <body name="base" pos="-0.15 0 0.74" quat="0 0 0 -1" childclass="ur3e">
+    <body name="base" pos="-0.15 0 0.74" quat="1 0 0 0" childclass="ur3e">
       <inertial mass="2.0" pos="0 0 0" diaginertia="0.0022 0.0022 0.0036"/>
       <geom mesh="base_0" material="black" class="visual" name="base_viz_0"/>
       <geom mesh="base_1" material="jointgray" class="visual" name="base_viz_1"/>
@@ -208,7 +206,7 @@
 
   <keyframe>
     <key name="home"
-         qpos="-1.5708 -1.5708 1.5708 -1.5708 -1.5708 0"
-         ctrl="-1.5708 -1.5708 1.5708 -1.5708 -1.5708 0"/>
+         qpos="-0.4147 -1.5708 1.5708 -1.5708 -1.5708 0"
+         ctrl="-0.4147 -1.5708 1.5708 -1.5708 -1.5708 0"/>
   </keyframe>
 </mujoco>

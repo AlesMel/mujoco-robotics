@@ -58,8 +58,8 @@ ROBOT_CONFIGS: Dict[str, RobotConfig] = {
         base_pos=np.array([-0.30, 0.0, 0.74]),
         # Official UR5e DH reach parameters: a2 + a3 + d5 + d6 ≈ 0.85 m
         link_lengths=[0.1625, 0.425, 0.3922, 0.1333, 0.0997, 0.0996],
-        # Menagerie-style home — arm up, forearm horizontal, wrist down
-        init_q=np.array([-np.pi, -np.pi / 2, np.pi / 2,
+        # Forward-facing home in this MJCF frame (toward table center).
+        init_q=np.array([-0.2670, -np.pi / 2, np.pi / 2,
                          -np.pi / 2, -np.pi / 2, 0.0]),
         # Goal sampling volume (world frame, above table, IN FRONT of arm)
         # Base at x=−0.30, EE home at x≈+0.20 → goals span x∈[−0.10, 0.55]
@@ -84,8 +84,8 @@ ROBOT_CONFIGS: Dict[str, RobotConfig] = {
         base_pos=np.array([-0.15, 0.0, 0.74]),
         # Official UR3e DH reach parameters: a2 + a3 + d5 + d6 ≈ 0.50 m
         link_lengths=[0.15185, 0.24355, 0.2132, 0.13105, 0.08535, 0.0921],
-        # Menagerie-style home — arm up, forearm horizontal, wrist down
-        init_q=np.array([-np.pi, -np.pi / 2, np.pi / 2,
+        # Forward-facing home in this MJCF frame (toward table center).
+        init_q=np.array([-0.4147, -np.pi / 2, np.pi / 2,
                          -np.pi / 2, -np.pi / 2, 0.0]),
         # Goal sampling volume (world frame, above table, IN FRONT of arm)
         # Base at x=−0.15, EE home at x≈+0.15 → goals span x∈[−0.02, 0.35]

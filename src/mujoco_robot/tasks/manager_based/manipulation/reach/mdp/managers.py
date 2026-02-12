@@ -130,14 +130,13 @@ class RewardManager:
         total = 0.0
         raw_terms: dict[str, float] = {}
         weighted_terms: dict[str, float] = {}
-        step_dt = float(self._env.model.opt.timestep * self._env.n_substeps)
 
         for term in self._terms:
             if not term.enabled:
                 continue
             raw = float(term.fn(self._env, ctx))
             weight = term.weight(self._env) if callable(term.weight) else float(term.weight)
-            weighted = weight * raw * step_dt
+            weighted = weight * raw
             total += weighted
             raw_terms[term.name] = raw
             weighted_terms[term.name] = float(weighted)

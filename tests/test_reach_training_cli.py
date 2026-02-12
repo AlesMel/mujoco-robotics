@@ -3,15 +3,7 @@
 from __future__ import annotations
 
 import argparse
-import sys
-from pathlib import Path
-
-_ROOT = Path(__file__).resolve().parents[1]
-_PKG_ROOT = _ROOT / "src" / "mujoco_robot"
-if str(_PKG_ROOT) not in sys.path:
-    sys.path.insert(0, str(_PKG_ROOT))
-
-from training.reach_cli import (
+from mujoco_robot.training.reach_cli import (
     add_reach_train_args,
     reach_train_kwargs_from_args,
 )

@@ -9,6 +9,11 @@ from mujoco_robot.tasks.manager_based.manipulation.reach import (
     make_reach_manager_based_env,
     make_reach_manager_based_gymnasium,
 )
+from mujoco_robot.tasks.lift_suction import (
+    LiftSuctionTaskConfig,
+    make_lift_suction_env,
+    make_lift_suction_gymnasium,
+)
 from mujoco_robot.tasks.slot_sorter import (
     SlotSorterTaskConfig,
     make_slot_sorter_env,
@@ -41,6 +46,13 @@ TASK_REGISTRY: Dict[str, TaskSpec] = {
         config_type=SlotSorterTaskConfig,
         make_raw=make_slot_sorter_env,
         make_gymnasium=make_slot_sorter_gymnasium,
+    ),
+    "lift_suction": TaskSpec(
+        name="lift_suction",
+        description="UR3e single-object lifting with a suction end-effector.",
+        config_type=LiftSuctionTaskConfig,
+        make_raw=make_lift_suction_env,
+        make_gymnasium=make_lift_suction_gymnasium,
     ),
 }
 

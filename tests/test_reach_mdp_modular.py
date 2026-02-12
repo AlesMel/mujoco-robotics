@@ -44,8 +44,7 @@ def test_reach_mdp_reward_override_constant() -> None:
     )
     env.reset(seed=0)
     step = env.step(np.zeros(env.action_dim, dtype=np.float32))
-    step_dt = env.model.opt.timestep * env.n_substeps
-    assert np.isclose(step.reward, 2.5 * step_dt)
+    assert np.isclose(step.reward, 2.5)
     env.close()
 
 

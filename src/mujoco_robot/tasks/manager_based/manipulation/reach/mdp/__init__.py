@@ -25,6 +25,13 @@ from .config import (
     default_timeout_term,
     make_default_reach_mdp_cfg,
 )
+from .rewards import (
+    action_rate_l2,
+    joint_vel_l2,
+    orientation_command_error,
+    position_command_error,
+    position_command_error_tanh,
+)
 from . import actions, commands, observations, rewards, terminations
 
 __all__ = [
@@ -47,10 +54,14 @@ __all__ = [
     "default_failure_term",
     "default_timeout_term",
     "make_default_reach_mdp_cfg",
+    "position_command_error",
+    "position_command_error_tanh",
+    "orientation_command_error",
+    "action_rate_l2",
+    "joint_vel_l2",
     "actions",
     "commands",
     "observations",
     "rewards",
     "terminations",
 ]
-
