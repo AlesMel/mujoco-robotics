@@ -33,6 +33,15 @@ def position_command_error_tanh_with_std(std: float):
     return _fn
 
 
+def orientation_error_tanh_with_std(std: float):
+    """Return an orientation tanh reward function with custom std."""
+
+    def _fn(env, ctx: dict[str, float]) -> float:
+        return orientation_error_tanh(env, ctx, std=float(std))
+
+    return _fn
+
+
 def orientation_error_tanh_std_02(env, ctx: dict[str, float]) -> float:
     return orientation_error_tanh(env, ctx, std=0.2)
 

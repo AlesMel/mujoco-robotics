@@ -23,7 +23,9 @@ class ReachRewardCfg:
     position_tanh_weight: float = 0.1
     position_tanh_std: float = 0.1
     include_orientation: bool = True
-    orientation_error_weight: float = -0.1
+    orientation_error_weight: float = -0.2
+    orientation_tanh_weight: float = 0.05
+    orientation_tanh_std: float = 0.2
     include_action_rate: bool = True
     action_rate_weight: float | WeightFn = -0.0001
     include_joint_vel: bool = True
@@ -79,6 +81,19 @@ def default_reward_terms(
                 weight=orientation_weight,
             )
         )
+        # ori_tanh_weight = float(cfg.orientation_tanh_weight)
+        # if abs(ori_tanh_weight) > 1e-12:
+        #     if abs(float(cfg.orientation_tanh_std) - 0.2) < 1e-12:
+        #         ori_tanh_fn = rewards.orientation_error_tanh
+        #     else:
+        #         ori_tanh_fn = rewards.orientation_error_tanh_with_std(cfg.orientation_tanh_std)
+        #     terms.append(
+        #         RewardTermCfg(
+        #             name="end_effector_orientation_tracking_fine_grained",
+        #             fn=ori_tanh_fn,
+        #             weight=ori_tanh_weight,
+        #         )
+        #     )
 
     if cfg.include_action_rate:
         terms.append(

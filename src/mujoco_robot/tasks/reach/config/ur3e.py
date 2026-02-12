@@ -3,7 +3,8 @@ from __future__ import annotations
 
 import math
 
-from ..reach_env_cfg import ActionCfg, CommandCfg, PhysicsCfg, ReachEnvCfg, SceneCfg
+from ..mdp import ReachRewardCfg
+from ..reach_env_cfg import ActionCfg, CommandCfg, ManagerCfg, PhysicsCfg, ReachEnvCfg, SceneCfg
 
 
 def make_ur3e_joint_pos_cfg() -> ReachEnvCfg:
@@ -17,8 +18,15 @@ def make_ur3e_joint_pos_cfg() -> ReachEnvCfg:
         ),
         physics=PhysicsCfg(
             actuator_kp=100.0,
-            min_joint_damping=30.0,
+            min_joint_damping=60.0,
             min_joint_frictionloss=1.2,
+        ),
+        managers=ManagerCfg(
+            reward_cfg=ReachRewardCfg(
+                orientation_error_weight=-0.2,
+                orientation_tanh_weight=0.05,
+                orientation_tanh_std=0.2,
+            ),
         ),
     )
 

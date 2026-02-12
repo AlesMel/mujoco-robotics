@@ -50,7 +50,7 @@ class CommandCfg:
 class SuccessCfg:
     """Goal thresholds and hold/resampling policy."""
 
-    reach_threshold: float = 0.1
+    reach_threshold: float = 0.01
     ori_threshold: float = 0.1
     terminate_on_success: bool = False
     terminate_on_collision: bool = False
