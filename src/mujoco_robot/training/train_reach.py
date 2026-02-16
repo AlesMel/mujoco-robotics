@@ -87,7 +87,9 @@ def train_reach_ppo(
     if save_video:
 
         def make_eval_env():
-            cfg = build_cfg(seed=0, render_mode="rgb_array")
+            # Use a stochastic eval seed so video episodes do not always start
+            # from the exact same sampled goal/state.
+            cfg = build_cfg(seed=None, render_mode="rgb_array")
             # Keep policy-evaluation videos noise-free for stable diagnostics.
             cfg.physics.obs_noise = 0.0
             return Monitor(make_reach_manager_based_gymnasium(cfg))

@@ -169,10 +169,10 @@ class URReachEnvBase:
         ============== ===== ===================================
         → total = 25   (matches Isaac Lab reach env exactly)
 
-    Reward (Isaac Lab reach manager cfg):
-        ``-0.2 * position_error`` + ``0.1 * position_error_tanh(std=0.1)`` +
-        ``-0.1 * orientation_error`` +
-        ``-1e-4 * ||Δa||²`` + ``-1e-4 * ||q̇||²``.
+    Reward (default manager cfg):
+        Dense bounded proximity in ``[0, 1]`` with configurable position/orientation
+        weighting and optional clipping. Legacy Isaac-style additive terms can be
+        enabled via ``ReachRewardCfg(reward_mode="legacy_isaac")``.
     """
 
     # Subclasses may refine these; defaults assume 6-DOF action.

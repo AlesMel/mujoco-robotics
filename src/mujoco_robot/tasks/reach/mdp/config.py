@@ -19,6 +19,14 @@ from .terms import (
 class ReachRewardCfg:
     """High-level reward configuration for reach default terms."""
 
+    reward_mode: str = "dense_bounded"
+    dense_position_std: float = 0.05
+    dense_orientation_std: float = 0.2
+    dense_position_weight: float = 0.8
+    dense_orientation_weight: float = 0.2
+    clip_to_unit_interval: bool = True
+
+    # Legacy Isaac-style additive terms (used only when reward_mode="legacy_isaac")
     position_error_weight: float = -0.2
     position_tanh_weight: float = 0.1
     position_tanh_std: float = 0.1
@@ -26,9 +34,9 @@ class ReachRewardCfg:
     orientation_error_weight: float = -0.2
     orientation_tanh_weight: float = 0.05
     orientation_tanh_std: float = 0.2
-    include_action_rate: bool = True
+    include_action_rate: bool = False
     action_rate_weight: float | WeightFn = -0.0001
-    include_joint_vel: bool = True
+    include_joint_vel: bool = False
     joint_vel_weight: float | WeightFn = -0.0001
 
 
@@ -54,46 +62,77 @@ def default_reward_terms(
 ) -> tuple[RewardTermCfg, ...]:
     cfg = reward_cfg or ReachRewardCfg()
 
-    if abs(float(cfg.position_tanh_std) - 0.1) < 1e-12:
-        position_tanh_fn = rewards.position_command_error_tanh
-    else:
-        position_tanh_fn = rewards.position_command_error_tanh_with_std(cfg.position_tanh_std)
+    terms: list[RewardTermCfg] = []
+    reward_mode = str(cfg.reward_mode).strip().lower()
 
-    terms: list[RewardTermCfg] = [
-        RewardTermCfg(
-            name="end_effector_position_tracking",
-            fn=rewards.position_command_error,
-            weight=float(cfg.position_error_weight),
-        ),
-        RewardTermCfg(
-            name="end_effector_position_tracking_fine_grained",
-            fn=position_tanh_fn,
-            weight=float(cfg.position_tanh_weight),
-        ),
-    ]
+    if reward_mode == "dense_bounded":
+        pos_w = max(0.0, float(cfg.dense_position_weight))
+        ori_w = max(0.0, float(cfg.dense_orientation_weight)) if cfg.include_orientation else 0.0
+        total_w = pos_w + ori_w
+        if total_w <= 1e-12:
+            pos_w, ori_w, total_w = 1.0, 0.0, 1.0
+        pos_w /= total_w
+        ori_w /= total_w
 
-    orientation_weight = float(cfg.orientation_error_weight)
-    if cfg.include_orientation or abs(orientation_weight) > 1e-12:
+        if abs(float(cfg.dense_position_std) - 0.05) < 1e-12:
+            pos_fn = rewards.position_command_error_exp
+        else:
+            pos_fn = rewards.position_command_error_exp_with_std(cfg.dense_position_std)
         terms.append(
             RewardTermCfg(
-                name="end_effector_orientation_tracking",
-                fn=rewards.orientation_command_error,
-                weight=orientation_weight,
+                name="dense_position_proximity",
+                fn=pos_fn,
+                weight=pos_w,
             )
         )
-        # ori_tanh_weight = float(cfg.orientation_tanh_weight)
-        # if abs(ori_tanh_weight) > 1e-12:
-        #     if abs(float(cfg.orientation_tanh_std) - 0.2) < 1e-12:
-        #         ori_tanh_fn = rewards.orientation_error_tanh
-        #     else:
-        #         ori_tanh_fn = rewards.orientation_error_tanh_with_std(cfg.orientation_tanh_std)
-        #     terms.append(
-        #         RewardTermCfg(
-        #             name="end_effector_orientation_tracking_fine_grained",
-        #             fn=ori_tanh_fn,
-        #             weight=ori_tanh_weight,
-        #         )
-        #     )
+
+        if ori_w > 1e-12:
+            if abs(float(cfg.dense_orientation_std) - 0.2) < 1e-12:
+                ori_fn = rewards.orientation_command_error_exp
+            else:
+                ori_fn = rewards.orientation_command_error_exp_with_std(cfg.dense_orientation_std)
+            terms.append(
+                RewardTermCfg(
+                    name="dense_orientation_proximity",
+                    fn=ori_fn,
+                    weight=ori_w,
+                )
+            )
+    elif reward_mode == "legacy_isaac":
+        if abs(float(cfg.position_tanh_std) - 0.1) < 1e-12:
+            position_tanh_fn = rewards.position_command_error_tanh
+        else:
+            position_tanh_fn = rewards.position_command_error_tanh_with_std(cfg.position_tanh_std)
+
+        terms.extend(
+            (
+                RewardTermCfg(
+                    name="end_effector_position_tracking",
+                    fn=rewards.position_command_error,
+                    weight=float(cfg.position_error_weight),
+                ),
+                RewardTermCfg(
+                    name="end_effector_position_tracking_fine_grained",
+                    fn=position_tanh_fn,
+                    weight=float(cfg.position_tanh_weight),
+                ),
+            )
+        )
+
+        orientation_weight = float(cfg.orientation_error_weight)
+        if cfg.include_orientation or abs(orientation_weight) > 1e-12:
+            terms.append(
+                RewardTermCfg(
+                    name="end_effector_orientation_tracking",
+                    fn=rewards.orientation_command_error,
+                    weight=orientation_weight,
+                )
+            )
+    else:
+        raise ValueError(
+            "ReachRewardCfg.reward_mode must be 'dense_bounded' or 'legacy_isaac', "
+            f"got '{cfg.reward_mode}'"
+        )
 
     if cfg.include_action_rate:
         terms.append(
@@ -132,14 +171,16 @@ def make_default_reach_mdp_cfg(
     command_term: CommandTermCfg | None = None,
     reward_cfg: ReachRewardCfg | None = None,
 ) -> ReachMDPCfg:
+    cfg = reward_cfg or ReachRewardCfg()
     return ReachMDPCfg(
         action_term=action_term
         or ActionTermCfg(name="variant_apply_action", fn=actions.call_variant_apply_action),
         command_term=command_term or default_command_term(),
         observation_terms=default_observation_terms(),
-        reward_terms=default_reward_terms(reward_cfg=reward_cfg),
+        reward_terms=default_reward_terms(reward_cfg=cfg),
         success_term=default_success_term(),
         failure_term=default_failure_term(),
         timeout_term=default_timeout_term(),
         include_reward_terms_in_info=False,
+        reward_clip_to_unit_interval=bool(cfg.clip_to_unit_interval),
     )

@@ -10,11 +10,11 @@ from ..reach_env_cfg import ActionCfg, CommandCfg, ManagerCfg, PhysicsCfg, Reach
 def make_ur3e_joint_pos_cfg() -> ReachEnvCfg:
     return ReachEnvCfg(
         scene=SceneCfg(robot="ur3e"),
-        actions=ActionCfg(control_variant="joint_pos", joint_target_ema_alpha=1.0),
+        actions=ActionCfg(control_variant="joint_pos", joint_target_ema_alpha=0.35),
         commands=CommandCfg(
             goal_roll_range=(0.0, 0.0),
             goal_pitch_range=(0.0, 0.0),
-            goal_yaw_range=(-0.5, 0.5),
+            goal_yaw_range=(-math.pi, math.pi),
         ),
         physics=PhysicsCfg(
             actuator_kp=500.0,
@@ -23,9 +23,16 @@ def make_ur3e_joint_pos_cfg() -> ReachEnvCfg:
         ),
         managers=ManagerCfg(
             reward_cfg=ReachRewardCfg(
-                orientation_error_weight=-0.2,
-                orientation_tanh_weight=0.05,
-                orientation_tanh_std=0.2,
+                reward_mode="dense_bounded",
+                dense_position_std=0.05,
+                dense_orientation_std=0.2,
+                dense_position_weight=0.7,
+                dense_orientation_weight=0.3,
+                clip_to_unit_interval=True,
+                include_action_rate=True,
+                action_rate_weight=-0.0015,
+                include_joint_vel=True,
+                joint_vel_weight=-0.0002,
             ),
         ),
     )

@@ -55,6 +55,8 @@ def compute_step_reward(env: Any) -> tuple[float, bool, dict]:
     step_dt = float(env.model.opt.timestep * env.n_substeps)
     sr = env._success_tracker.update(success, step_dt)
     reward = float(reward + sr.total_reward_add)
+    if bool(getattr(env._mdp_cfg, "reward_clip_to_unit_interval", False)):
+        reward = float(np.clip(reward, 0.0, 1.0))
 
     # --- Goal resampling ---
     goal_resampled = False

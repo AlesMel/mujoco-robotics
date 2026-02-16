@@ -70,3 +70,4 @@ class ReachMDPCfg:
     failure_term: TerminationTermCfg | None = None
     timeout_term: TerminationTermCfg | None = None
     include_reward_terms_in_info: bool = False
+    reward_clip_to_unit_interval: bool = False

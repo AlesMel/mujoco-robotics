@@ -4,6 +4,10 @@ from __future__ import annotations
 import math
 
 
+def _safe_std(std: float) -> float:
+    return max(1e-6, float(std))
+
+
 def position_command_error(_env, ctx: dict[str, float]) -> float:
     return float(ctx["dist"])
 
@@ -12,12 +16,22 @@ def position_command_error_tanh(_env, ctx: dict[str, float], std: float = 0.1) -
     return float(1.0 - math.tanh(ctx["dist"] / std))
 
 
+def position_command_error_exp(_env, ctx: dict[str, float], std: float = 0.05) -> float:
+    x = float(ctx["dist"]) / _safe_std(std)
+    return float(math.exp(-(x * x)))
+
+
 def orientation_command_error(_env, ctx: dict[str, float]) -> float:
     return float(ctx["ori_err"])
 
 
 def orientation_error_tanh(_env, ctx: dict[str, float], std: float = 0.2) -> float:
     return float(1.0 - math.tanh(ctx["ori_err"] / std))
+
+
+def orientation_command_error_exp(_env, ctx: dict[str, float], std: float = 0.2) -> float:
+    x = float(ctx["ori_err"]) / _safe_std(std)
+    return float(math.exp(-(x * x)))
 
 
 def position_command_error_tanh_std_01(env, ctx: dict[str, float]) -> float:
@@ -33,11 +47,29 @@ def position_command_error_tanh_with_std(std: float):
     return _fn
 
 
+def position_command_error_exp_with_std(std: float):
+    """Return a position exp reward function with custom std."""
+
+    def _fn(env, ctx: dict[str, float]) -> float:
+        return position_command_error_exp(env, ctx, std=float(std))
+
+    return _fn
+
+
 def orientation_error_tanh_with_std(std: float):
     """Return an orientation tanh reward function with custom std."""
 
     def _fn(env, ctx: dict[str, float]) -> float:
         return orientation_error_tanh(env, ctx, std=float(std))
+
+    return _fn
+
+
+def orientation_command_error_exp_with_std(std: float):
+    """Return an orientation exp reward function with custom std."""
+
+    def _fn(env, ctx: dict[str, float]) -> float:
+        return orientation_command_error_exp(env, ctx, std=float(std))
 
     return _fn
 
@@ -74,4 +106,3 @@ def scaled_by_step_dt(base_weight: float):
         return float(base_weight * env.model.opt.timestep * env.n_substeps)
 
     return _weight
-
