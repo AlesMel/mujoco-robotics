@@ -18,12 +18,19 @@ from typing import Dict, Iterable, Optional, Tuple
 import gymnasium
 import mujoco
 import numpy as np
+from PIL import Image, ImageDraw, ImageFont
 
-from mujoco_robot.core.xml_builder import load_robot_xml
+from mujoco_robot.core.xml_builder import (
+    ensure_spawn_table,
+    inject_side_camera,
+    load_robot_xml,
+    set_framebuffer_size,
+)
 from mujoco_robot.assets.actuators import (
     configure_position_actuators,
     resolve_robot_actuators,
 )
+from mujoco_robot.assets.configs import get_robot_config
 from mujoco_robot.envs.step_result import StepResult
 
 
@@ -58,15 +65,21 @@ class LiftSuctionGymnasium(gymnasium.Env):
         self,
         seed: int | None = None,
         render: bool = False,
+        render_mode: str | None = None,
         time_limit: int = 300,
         model_path: str = _DEFAULT_MODEL,
         actuator_profile: str = "ur3e",
         **env_kwargs,
     ):
+        # Backward-compatibility: legacy ``render=True`` implies rgb array output.
+        resolved_render_mode = render_mode or ("rgb_array" if render else None)
+        if resolved_render_mode not in {None, "rgb_array", "human"}:
+            raise ValueError("render_mode must be one of: None, 'rgb_array', 'human'")
+
         self.base = URLiftSuctionEnv(
             model_path=model_path,
             actuator_profile=actuator_profile,
-            render_size=(160, 120) if not render else (640, 480),
+            render_size=(640, 480) if resolved_render_mode == "rgb_array" else (160, 120),
             time_limit=time_limit,
             seed=seed,
             **env_kwargs,
@@ -77,24 +90,130 @@ class LiftSuctionGymnasium(gymnasium.Env):
         self.observation_space = gymnasium.spaces.Box(
             -np.inf, np.inf, shape=(self.base.observation_dim,), dtype=np.float32
         )
-        self.render_mode = "rgb_array" if render else None
+        self.render_mode = resolved_render_mode
+        self._human_viewer = None
 
     def reset(self, *, seed: int | None = None, options=None):
         obs = self.base.reset(seed=seed)
+        if self.render_mode == "human":
+            self.render()
         return obs.astype(np.float32), {}
 
     def step(self, action):
         res: StepResult = self.base.step(action)
         terminated = bool(res.info.get("success", False))
         truncated = bool(res.info.get("time_out", False) and not terminated)
+        if self.render_mode == "human":
+            self.render()
         return res.obs, res.reward, terminated, truncated, res.info
 
     def render(self):
         if self.render_mode == "rgb_array":
             return self.base.render(mode="rgb_array")
+        if self.render_mode == "human":
+            if self._human_viewer is None:
+                try:
+                    import mujoco.viewer as mj_viewer
+                except Exception as exc:  # pragma: no cover - depends on system GUI setup.
+                    raise RuntimeError(
+                        "Human rendering requires mujoco.viewer with GUI support."
+                    ) from exc
+                self._human_viewer = mj_viewer.launch_passive(self.base.model, self.base.data)
+
+            if hasattr(self._human_viewer, "is_running") and not self._human_viewer.is_running():
+                self._human_viewer.close()
+                self._human_viewer = None
+                return None
+
+            if hasattr(self._human_viewer, "sync"):
+                self._human_viewer.sync()
+            return None
         return None
 
     def close(self):
+        if self._human_viewer is not None:
+            self._human_viewer.close()
+            self._human_viewer = None
+        self.base.close()
+
+
+class LiftSuctionContactGymnasium(gymnasium.Env):
+    """Gymnasium wrapper around :class:`URLiftSuctionContactEnv`."""
+
+    metadata = {"render_modes": ["rgb_array", "human"]}
+
+    def __init__(
+        self,
+        seed: int | None = None,
+        render: bool = False,
+        render_mode: str | None = None,
+        time_limit: int = 200,
+        model_path: str = _DEFAULT_MODEL,
+        actuator_profile: str = "ur3e",
+        **env_kwargs,
+    ):
+        resolved_render_mode = render_mode or ("rgb_array" if render else None)
+        if resolved_render_mode not in {None, "rgb_array", "human"}:
+            raise ValueError("render_mode must be one of: None, 'rgb_array', 'human'")
+
+        self.base = URLiftSuctionContactEnv(
+            model_path=model_path,
+            actuator_profile=actuator_profile,
+            render_size=(640, 480) if resolved_render_mode == "rgb_array" else (160, 120),
+            time_limit=time_limit,
+            seed=seed,
+            **env_kwargs,
+        )
+        self.action_space = gymnasium.spaces.Box(
+            -1.0, 1.0, shape=(self.base.action_dim,), dtype=np.float32
+        )
+        self.observation_space = gymnasium.spaces.Box(
+            -np.inf, np.inf, shape=(self.base.observation_dim,), dtype=np.float32
+        )
+        self.render_mode = resolved_render_mode
+        self._human_viewer = None
+
+    def reset(self, *, seed: int | None = None, options=None):
+        obs = self.base.reset(seed=seed)
+        if self.render_mode == "human":
+            self.render()
+        return obs.astype(np.float32), {}
+
+    def step(self, action):
+        res: StepResult = self.base.step(action)
+        terminated = bool(res.info.get("success", False))
+        truncated = bool(res.info.get("time_out", False) and not terminated)
+        if self.render_mode == "human":
+            self.render()
+        return res.obs, res.reward, terminated, truncated, res.info
+
+    def render(self):
+        if self.render_mode == "rgb_array":
+            return self.base.render(mode="rgb_array")
+        if self.render_mode == "human":
+            if self._human_viewer is None:
+                try:
+                    import mujoco.viewer as mj_viewer
+                except Exception as exc:  # pragma: no cover - depends on system GUI setup.
+                    raise RuntimeError(
+                        "Human rendering requires mujoco.viewer with GUI support."
+                    ) from exc
+                self._human_viewer = mj_viewer.launch_passive(self.base.model, self.base.data)
+
+            if hasattr(self._human_viewer, "is_running") and not self._human_viewer.is_running():
+                self._human_viewer.close()
+                self._human_viewer = None
+                return None
+
+            if hasattr(self._human_viewer, "sync"):
+                self._human_viewer.sync()
+            return None
+        return None
+
+    def close(self):
+        if self._human_viewer is not None:
+            self._human_viewer.close()
+            self._human_viewer = None
         self.base.close()
 
 
@@ -125,6 +244,7 @@ class URLiftSuctionEnv:
         self.lift_height = float(lift_height)
         self.render_size = render_size
         self.settle_steps = int(max(0, settle_steps))
+        self._table_spawn_margin_xy = 0.04
 
         # Control / stability settings.
         self.max_joint_vel = 4.0
@@ -136,9 +256,27 @@ class URLiftSuctionEnv:
             [-math.pi, -math.pi / 2.0, math.pi / 2.0, -math.pi / 2.0, -math.pi / 2.0, 0.0],
             dtype=float,
         )
-
-        self.spawn_xy_bounds = (0.04, 0.24, -0.18, 0.18)
+        self.spawn_xy_bounds = (-0.02, 0.35, -0.20, 0.20)
         self.obj_half = np.array([0.02, 0.02, 0.02], dtype=float)
+
+        # Align robot home posture and spawn workspace with reach task defaults.
+        robot_name = actuator_profile
+        if robot_name not in {"ur3e", "ur5e"}:
+            stem = Path(model_path).stem.lower()
+            if stem in {"ur3e", "ur5e"}:
+                robot_name = stem
+        try:
+            robot_cfg = get_robot_config(robot_name)
+            self.init_q = robot_cfg.init_q.copy()
+            self.spawn_xy_bounds = (
+                float(robot_cfg.goal_bounds[0, 0]),
+                float(robot_cfg.goal_bounds[0, 1]),
+                float(robot_cfg.goal_bounds[1, 0]),
+                float(robot_cfg.goal_bounds[1, 1]),
+            )
+        except ValueError:
+            # Keep fallback defaults for custom actuator/model names.
+            pass
 
         robot_xml = self._load_robot_xml(model_path)
         self.model_xml = self._build_env_xml(robot_xml)
@@ -150,9 +288,10 @@ class URLiftSuctionEnv:
         self.model.opt.iterations = max(self.model.opt.iterations, 50)
         self.model.opt.gravity[:] = np.array([0.0, 0.0, -9.81])
 
-        self.renderer = mujoco.Renderer(
-            self.model, height=render_size[1], width=render_size[0]
-        )
+        rw, rh = self.render_size
+        self._renderer_top = mujoco.Renderer(self.model, height=rh, width=rw)
+        self._renderer_side = mujoco.Renderer(self.model, height=rh, width=rw)
+        self._renderer_ee = mujoco.Renderer(self.model, height=rh, width=rw)
 
         self.ee_site = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_SITE, "ee_site")
         self.suction_site = mujoco.mj_name2id(
@@ -194,6 +333,8 @@ class URLiftSuctionEnv:
         self._last_action = np.zeros(self.action_dim, dtype=np.float32)
         self._spawn_pos = np.zeros(3, dtype=float)
         self._goal_pos = np.zeros(3, dtype=float)
+        self._last_reward = 0.0
+        self._last_step_info: Dict[str, float | bool] = {}
 
     # ------------------------------------------------------------------ XML
     def _load_robot_xml(self, path: str) -> str:
@@ -207,16 +348,10 @@ class URLiftSuctionEnv:
     def _build_env_xml(self, robot_xml: str) -> str:
         root = ET.fromstring(robot_xml)
 
-        # Framebuffer
-        w, h = self.render_size
-        visual = root.find("visual")
-        if visual is None:
-            visual = ET.SubElement(root, "visual")
-        global_elem = visual.find("global")
-        if global_elem is None:
-            global_elem = ET.SubElement(visual, "global")
-        global_elem.set("offwidth", str(max(w, 640)))
-        global_elem.set("offheight", str(max(h, 480)))
+        # Match reach scene setup for framebuffer + canonical spawn table/floor.
+        set_framebuffer_size(root, self.render_size[0], self.render_size[1])
+        ensure_spawn_table(root)
+        inject_side_camera(root)
 
         asset = root.find("asset")
         if asset is None:
@@ -377,6 +512,24 @@ class URLiftSuctionEnv:
 
     def _sample_object_spawn(self) -> np.ndarray:
         x_lo, x_hi, y_lo, y_hi = self.spawn_xy_bounds
+        table_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_GEOM, "table")
+        if (
+            table_id >= 0
+            and int(self.model.geom_type[table_id]) == int(mujoco.mjtGeom.mjGEOM_BOX)
+        ):
+            table_pos = self.model.geom_pos[table_id]
+            table_size = self.model.geom_size[table_id]
+            x_lo = max(x_lo, float(table_pos[0] - table_size[0]) + self._table_spawn_margin_xy)
+            x_hi = min(x_hi, float(table_pos[0] + table_size[0]) - self._table_spawn_margin_xy)
+            y_lo = max(y_lo, float(table_pos[1] - table_size[1]) + self._table_spawn_margin_xy)
+            y_hi = min(y_hi, float(table_pos[1] + table_size[1]) - self._table_spawn_margin_xy)
+
+        # Match reach robustness for unusual table/model combinations.
+        if x_lo >= x_hi:
+            x_lo, x_hi = self.spawn_xy_bounds[0], self.spawn_xy_bounds[1]
+        if y_lo >= y_hi:
+            y_lo, y_hi = self.spawn_xy_bounds[2], self.spawn_xy_bounds[3]
+
         x = self._rng.uniform(x_lo, x_hi)
         y = self._rng.uniform(y_lo, y_hi)
         z = self._table_top_z() + self.obj_half[2] + 0.001
@@ -393,6 +546,8 @@ class URLiftSuctionEnv:
         self.grasped = False
         self._grasp_offset[:] = 0.0
         self._last_action[:] = 0.0
+        self._last_reward = 0.0
+        self._last_step_info = {}
 
         for qi, (qpos_adr, dof_adr, act_id) in enumerate(
             zip(self._robot_qpos_ids, self.robot_dofs, self.robot_actuators)
@@ -601,22 +756,180 @@ class URLiftSuctionEnv:
         shaped, done, info = self._compute_reward()
         reward += shaped
         self.step_id += 1
+        self._last_reward = float(reward)
+        self._last_step_info = dict(info)
         return StepResult(self._observe(), float(reward), done, info)
+
+    def _draw_metrics_overlay(self, frame: np.ndarray) -> np.ndarray:
+        """Draw a compact info panel for suction diagnostics."""
+        info = self._last_step_info if isinstance(self._last_step_info, dict) else {}
+        h, w = frame.shape[:2]
+        img = Image.fromarray(frame)
+        draw = ImageDraw.Draw(img, "RGBA")
+
+        try:
+            font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf", 13)
+        except (IOError, OSError):
+            font = ImageFont.load_default()
+
+        lines = [
+            f"Step:       {self.step_id:5d} / {self.time_limit}",
+            f"Reward:     {self._last_reward:+.4f}",
+            "",
+            f"Grasped:    {bool(info.get('grasped', self.grasped))}",
+            f"Suction on: {bool(info.get('suction_on', self.suction_on))}",
+            f"Cup->Obj:   {float(info.get('cup_obj_dist', np.nan)):.4f} m",
+            f"Obj->Goal:  {float(info.get('obj_goal_dist', np.nan)):.4f} m",
+            f"Obj height: {float(info.get('object_height', np.nan)):.4f} m",
+            f"Goal hgt:   {float(info.get('goal_height', np.nan)):.4f} m",
+            "",
+            f"Success:    {bool(info.get('success', False))}",
+            f"Time out:   {bool(info.get('time_out', False))}",
+        ]
+
+        line_h = 16
+        pad = 8
+        panel_w = min(360, w - 16)
+        panel_h = min(h - 16, pad * 2 + line_h * len(lines))
+        panel_x = w - panel_w - 8
+        panel_y = 8
+        draw.rectangle(
+            [panel_x, panel_y, panel_x + panel_w, panel_y + panel_h],
+            fill=(0, 0, 0, 160),
+        )
+        y = panel_y + pad
+        for text in lines:
+            if y + line_h > panel_y + panel_h - pad:
+                break
+            if text:
+                draw.text((panel_x + pad, y), text, fill=(230, 230, 230, 255), font=font)
+            y += line_h
+        return np.array(img)
+
+    def _compose_multi_camera_frame(self) -> np.ndarray:
+        """Render top/side/ee views and compose a 2x2 frame with info panel."""
+        self._renderer_top.update_scene(self.data, camera="top")
+        frame_top = self._renderer_top.render()
+        self._renderer_side.update_scene(self.data, camera="side")
+        frame_side = self._renderer_side.render()
+        self._renderer_ee.update_scene(self.data, camera="ee_cam")
+        frame_ee = self._renderer_ee.render()
+
+        top_row = np.concatenate([frame_top, frame_side], axis=1)
+        stats_frame = np.full_like(frame_ee, 18)
+        stats_frame = self._draw_metrics_overlay(stats_frame)
+        bottom_row = np.concatenate([frame_ee, stats_frame], axis=1)
+        return np.concatenate([top_row, bottom_row], axis=0)
 
     def render(self, mode: str = "human") -> Optional[np.ndarray]:
         if mode == "human":
             return None
         if mode == "rgb_array":
-            self.renderer.update_scene(self.data, camera="top")
-            return self.renderer.render()
+            return self._compose_multi_camera_frame()
         raise ValueError("mode must be 'human' or 'rgb_array'")
 
     def close(self) -> None:
-        if hasattr(self.renderer, "close"):
-            self.renderer.close()
-        elif hasattr(self.renderer, "free"):
-            self.renderer.free()
-        self.renderer = None
+        for renderer_name in ("_renderer_top", "_renderer_side", "_renderer_ee"):
+            renderer = getattr(self, renderer_name, None)
+            if renderer is None:
+                continue
+            if hasattr(renderer, "close"):
+                renderer.close()
+            elif hasattr(renderer, "free"):
+                renderer.free()
+            setattr(self, renderer_name, None)
 
     def sample_action(self) -> np.ndarray:
         return self._rng.uniform(-1.0, 1.0, size=self.action_dim).astype(np.float32)
+
+
+class URLiftSuctionContactEnv(URLiftSuctionEnv):
+    """Primitive suction stage focused on contact + grasp hold."""
+
+    def __init__(
+        self,
+        *args,
+        contact_success_hold_steps: int = 8,
+        contact_spawn_jitter_xy: float = 0.0,
+        **kwargs,
+    ) -> None:
+        kwargs.setdefault("lift_height", 0.02)
+        kwargs.setdefault("time_limit", 200)
+        super().__init__(*args, **kwargs)
+        self.contact_success_hold_steps = max(1, int(contact_success_hold_steps))
+        self.contact_spawn_jitter_xy = max(0.0, float(contact_spawn_jitter_xy))
+        self._contact_hold_steps = 0
+        self._prev_grasped = False
+
+    def _sample_object_spawn(self) -> np.ndarray:
+        """Place object near table center with optional small XY jitter."""
+        x_center = 0.5 * (self.spawn_xy_bounds[0] + self.spawn_xy_bounds[1])
+        y_center = 0.5 * (self.spawn_xy_bounds[2] + self.spawn_xy_bounds[3])
+        j = self.contact_spawn_jitter_xy
+        if j > 0.0:
+            x_center += float(self._rng.uniform(-j, j))
+            y_center += float(self._rng.uniform(-j, j))
+            x_center = float(np.clip(x_center, self.spawn_xy_bounds[0], self.spawn_xy_bounds[1]))
+            y_center = float(np.clip(y_center, self.spawn_xy_bounds[2], self.spawn_xy_bounds[3]))
+        z = self._table_top_z() + self.obj_half[2] + 0.001
+        return np.array([x_center, y_center, z], dtype=float)
+
+    def reset(self, seed: Optional[int] = None) -> np.ndarray:
+        self._contact_hold_steps = 0
+        self._prev_grasped = False
+        return super().reset(seed=seed)
+
+    def _compute_reward(self) -> Tuple[float, bool, Dict]:
+        obj_pos = self.data.xpos[self.obj_body_id].copy()
+        suction_pos = self._suction_pos()
+        qvel_adr = int(self.model.jnt_dofadr[self.obj_free_id])
+        obj_vel = self.data.qvel[qvel_adr: qvel_adr + 3]
+        obj_speed = float(np.linalg.norm(obj_vel))
+
+        cup_obj_dist = float(np.linalg.norm(suction_pos - obj_pos))
+        reward = -0.002
+        reward -= 1.2 * cup_obj_dist
+        if self.suction_on:
+            reward += 0.02
+        if self.grasped:
+            reward += 0.40
+            # Reward calm grasp dynamics and penalize shaking/slinging.
+            reward += 0.10 * float(np.exp(-6.0 * obj_speed))
+            reward -= 0.25 * obj_speed
+
+        dropped = bool(self._prev_grasped and not self.grasped)
+        if dropped:
+            reward -= 0.60
+
+        stable_contact = bool(
+            self.grasped
+            and cup_obj_dist < (self.suction_radius * 1.15)
+            and obj_speed < 0.25
+        )
+        if stable_contact:
+            self._contact_hold_steps += 1
+        else:
+            self._contact_hold_steps = 0
+
+        success = bool(self._contact_hold_steps >= self.contact_success_hold_steps)
+        if success:
+            reward += 3.0
+
+        time_out = bool(self.time_limit > 0 and self.step_id >= self.time_limit)
+        done = bool(success or time_out)
+        info = {
+            "success": success,
+            "time_out": time_out,
+            "grasped": bool(self.grasped),
+            "suction_on": bool(self.suction_on),
+            "cup_obj_dist": cup_obj_dist,
+            "obj_goal_dist": float(np.linalg.norm(obj_pos - self._goal_pos)),
+            "object_height": float(obj_pos[2]),
+            "goal_height": float(self._goal_pos[2]),
+            "object_speed": obj_speed,
+            "dropped": dropped,
+            "contact_hold_steps": int(self._contact_hold_steps),
+            "contact_hold_steps_required": int(self.contact_success_hold_steps),
+        }
+        self._prev_grasped = bool(self.grasped)
+        return float(reward), done, info

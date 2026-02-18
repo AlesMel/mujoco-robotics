@@ -1,14 +1,8 @@
-"""Train PPO on the manager-based reach task.
+"""Train PPO on the lift-suction task.
 
 Usage::
 
-    python -m mujoco_robot.training.train_reach --cfg-name ur5e_joint_pos --total-timesteps 500000
-    python -m mujoco_robot.training.train_reach --cfg-name ur5e_joint_pos
-
-Or from Python::
-
-    from mujoco_robot.training.train_reach import train_reach_ppo
-    model = train_reach_ppo(cfg_name="ur5e_joint_pos", total_timesteps=500_000)
+    python -m mujoco_robot.training.train_suction --cfg-name ur3e_lift_suction_dense_stable
 """
 from __future__ import annotations
 
@@ -19,80 +13,73 @@ from stable_baselines3 import PPO
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import SubprocVecEnv, VecNormalize
 
-from mujoco_robot.tasks.reach import (
-    get_reach_cfg,
-    make_reach_manager_based_gymnasium,
+from mujoco_robot.tasks import (
+    get_lift_suction_cfg,
+    list_lift_suction_cfgs,
+    make_lift_suction_contact_gymnasium,
+    make_lift_suction_gymnasium,
 )
 from mujoco_robot.training.callbacks import BestEpisodeVideoCallback
 
 
-DEFAULT_CFG_NAME = "ur3e_joint_pos_dense_stable"
+DEFAULT_CFG_NAME = "ur3e_lift_suction_dense_stable"
 
 
-def train_reach_ppo(
-    total_timesteps: int = 10_000_000,
-    n_envs: int = 32,
+def train_suction_ppo(
+    total_timesteps: int = 1_000_000,
+    n_envs: int = 16,
     log_dir: str = "runs",
-    log_name: str = "reach_ppo",
+    log_name: str = "lift_suction_ppo",
     save_video: bool = True,
-    save_video_every: int = 500_000,
+    save_video_every: int = 50_000,
     progress_bar: bool = True,
     sb3_verbose: int = 0,
     callback_new_best_only: bool = True,
     cfg_name: str = DEFAULT_CFG_NAME,
 ):
-    """Quick-start PPO training on the manager-based reach task."""
+    """Quick-start PPO training on the lift-suction task."""
     profile_name = cfg_name
+    is_contact_stage = "suction_contact" in profile_name
 
     def build_cfg(seed: int | None, render_mode: str | None):
-        cfg = get_reach_cfg(profile_name)
-        cfg.scene.render_mode = render_mode
-        cfg.episode.seed = seed
+        cfg = get_lift_suction_cfg(profile_name)
+        cfg.seed = seed
+        cfg.render_mode = render_mode
         return cfg
 
-    preview_cfg = build_cfg(seed=0, render_mode=None)
+    def make_gym(cfg):
+        if is_contact_stage:
+            return make_lift_suction_contact_gymnasium(cfg)
+        return make_lift_suction_gymnasium(cfg)
 
+    preview_cfg = build_cfg(seed=0, render_mode=None)
     print(f"\n{'='*50}")
-    print("  Reach training config")
+    print("  Lift-suction training config")
     print(f"  Config profile:   {profile_name}")
-    print(f"  Robot:            {preview_cfg.scene.robot}")
-    print(f"  Control variant:  {preview_cfg.actions.control_variant}")
-    print(f"  Joint act scale:  {preview_cfg.actions.joint_action_scale:.3f} (IsaacLab scale)")
-    print(f"  Reach threshold:  {preview_cfg.success.reach_threshold:.3f} m")
-    print(f"  Ori threshold:    {preview_cfg.success.ori_threshold:.2f} rad")
-    print(f"  Hold steps:       {preview_cfg.success.success_hold_steps}")
-    print(f"  Success bonus:    {preview_cfg.success.success_bonus:.3f}")
-    print(f"  Stay reward w:    {preview_cfg.success.stay_reward_weight:.3f} /s")
-    print(f"  Resample success: {preview_cfg.success.resample_on_success}")
-    print(f"  Train obs noise:  {preview_cfg.physics.obs_noise:.4f}")
-    print("  Video obs noise:  0.0000")
+    print(f"  Task stage:       {'suction_contact' if is_contact_stage else 'lift_suction'}")
+    print(f"  Robot profile:    {preview_cfg.actuator_profile}")
+    print(f"  Time limit:       {preview_cfg.time_limit}")
     print(f"  Progress bar:     {progress_bar}")
-    if preview_cfg.actions.control_variant == "joint_pos_isaac_reward":
-        print("  Episode setup:    built-in defaults (12s, no in-episode goal resample)")
     print(f"  Total timesteps:  {total_timesteps:,}")
     print(f"{'='*50}\n")
 
-    def make_env(rank):
+    def make_env(rank: int):
         def _init():
             cfg = build_cfg(seed=rank, render_mode=None)
-            return Monitor(make_reach_manager_based_gymnasium(cfg))
+            return Monitor(make_gym(cfg))
 
         return _init
 
     vec_env = SubprocVecEnv([make_env(i) for i in range(n_envs)])
     vec_env = VecNormalize(vec_env, norm_obs=True, norm_reward=True, clip_obs=10.0)
 
-    env_name = f"reach_{preview_cfg.scene.robot}_{cfg_name}".replace("/", "_")
+    env_name = f"lift_suction_{preview_cfg.actuator_profile}_{cfg_name}".replace("/", "_")
     callbacks = []
     if save_video:
 
         def make_eval_env():
-            # Use a stochastic eval seed so video episodes do not always start
-            # from the exact same sampled goal/state.
             cfg = build_cfg(seed=None, render_mode="rgb_array")
-            # Keep policy-evaluation videos noise-free for stable diagnostics.
-            cfg.physics.obs_noise = 0.0
-            return Monitor(make_reach_manager_based_gymnasium(cfg))
+            return Monitor(make_gym(cfg))
 
         video_cb = BestEpisodeVideoCallback(
             make_eval_env=make_eval_env,
@@ -124,7 +111,10 @@ def train_reach_ppo(
         vf_coef=1.0,
         max_grad_norm=1.0,
         device="cuda",
-        policy_kwargs=dict(net_arch=dict(pi=[128, 128], vf=[128, 128])),
+        policy_kwargs=dict(
+            net_arch=dict(pi=[128, 128], vf=[128, 128]),
+            activation_fn=nn.Tanh,
+        ),
         verbose=sb3_verbose,
         tensorboard_log=log_dir,
     )
@@ -144,34 +134,41 @@ def train_reach_ppo(
     return model
 
 
-def main():
-    p = argparse.ArgumentParser(description="Train PPO on manager-based reach.")
-    p.add_argument("--cfg-name", type=str, default=DEFAULT_CFG_NAME)
-    p.add_argument("--total-timesteps", type=int, default=10_000_000)
-    p.add_argument("--n-envs", type=int, default=16)
-    p.add_argument("--save-video", action=argparse.BooleanOptionalAction, default=True)
-    p.add_argument("--save-video-every", type=int, default=50_000)
-    p.add_argument(
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Train PPO on lift-suction task.")
+    parser.add_argument("--cfg-name", type=str, default=DEFAULT_CFG_NAME)
+    parser.add_argument("--list-cfgs", action="store_true")
+    parser.add_argument("--total-timesteps", type=int, default=1_000_000)
+    parser.add_argument("--n-envs", type=int, default=16)
+    parser.add_argument("--save-video", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--save-video-every", type=int, default=50_000)
+    parser.add_argument(
         "--progress-bar",
         action=argparse.BooleanOptionalAction,
         default=True,
         help="Use Stable-Baselines3 tqdm/rich progress bar.",
     )
-    p.add_argument(
+    parser.add_argument(
         "--sb3-verbose",
         type=int,
         default=0,
         choices=[0, 1, 2],
         help="Stable-Baselines3 verbosity (0 recommended with progress bar).",
     )
-    p.add_argument(
+    parser.add_argument(
         "--callback-new-best-only",
         action=argparse.BooleanOptionalAction,
         default=True,
         help="If true, callback prints only when eval return reaches a new best.",
     )
-    args = p.parse_args()
-    train_reach_ppo(
+    args = parser.parse_args()
+
+    if args.list_cfgs:
+        print("\n".join(list_lift_suction_cfgs()))
+        return
+
+    train_suction_ppo(
+        cfg_name=args.cfg_name,
         total_timesteps=args.total_timesteps,
         n_envs=args.n_envs,
         save_video=args.save_video,
@@ -179,7 +176,6 @@ def main():
         progress_bar=args.progress_bar,
         sb3_verbose=args.sb3_verbose,
         callback_new_best_only=args.callback_new_best_only,
-        cfg_name=args.cfg_name,
     )
 
 

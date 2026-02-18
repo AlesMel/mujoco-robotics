@@ -101,3 +101,12 @@ gymnasium.register(
     entry_point="mujoco_robot.tasks.lift_suction.lift_suction_env:LiftSuctionGymnasium",
     max_episode_steps=300,
 )
+
+gymnasium.register(
+    id="MuJoCoRobot/Suction-Contact-v0",
+    entry_point=(
+        "mujoco_robot.tasks.lift_suction.lift_suction_env:"
+        "LiftSuctionContactGymnasium"
+    ),
+    max_episode_steps=200,
+)

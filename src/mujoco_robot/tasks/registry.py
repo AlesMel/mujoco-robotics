@@ -11,6 +11,8 @@ from mujoco_robot.tasks.reach import (
 )
 from mujoco_robot.tasks.lift_suction import (
     LiftSuctionTaskConfig,
+    make_lift_suction_contact_env,
+    make_lift_suction_contact_gymnasium,
     make_lift_suction_env,
     make_lift_suction_gymnasium,
 )
@@ -53,6 +55,13 @@ TASK_REGISTRY: Dict[str, TaskSpec] = {
         config_type=LiftSuctionTaskConfig,
         make_raw=make_lift_suction_env,
         make_gymnasium=make_lift_suction_gymnasium,
+    ),
+    "suction_contact": TaskSpec(
+        name="suction_contact",
+        description="Primitive suction pretraining stage: contact + grasp hold.",
+        config_type=LiftSuctionTaskConfig,
+        make_raw=make_lift_suction_contact_env,
+        make_gymnasium=make_lift_suction_contact_gymnasium,
     ),
 }
 

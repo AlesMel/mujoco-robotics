@@ -8,6 +8,10 @@ from mujoco_robot.tasks.reach import (
 )
 from mujoco_robot.tasks.lift_suction import (
     LiftSuctionTaskConfig,
+    get_lift_suction_cfg,
+    list_lift_suction_cfgs,
+    make_lift_suction_contact_env,
+    make_lift_suction_contact_gymnasium,
     make_lift_suction_env,
     make_lift_suction_gymnasium,
 )
@@ -43,6 +47,10 @@ __all__ = [
     "make_reach_manager_based_gymnasium",
     "list_reach_cfgs",
     "LiftSuctionTaskConfig",
+    "get_lift_suction_cfg",
+    "list_lift_suction_cfgs",
+    "make_lift_suction_contact_env",
+    "make_lift_suction_contact_gymnasium",
     "make_lift_suction_env",
     "make_lift_suction_gymnasium",
     "SlotSorterTaskConfig",

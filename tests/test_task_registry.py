@@ -13,7 +13,9 @@ from mujoco_robot.tasks import (
     LiftSuctionTaskConfig,
     ReachEnvCfg,
     SlotSorterTaskConfig,
+    get_lift_suction_cfg,
     get_task_spec,
+    list_lift_suction_cfgs,
     list_tasks,
     make_task,
 )
@@ -37,6 +39,7 @@ def test_task_registry_lists_builtin_tasks() -> None:
     assert "reach" in names
     assert "slot_sorter" in names
     assert "lift_suction" in names
+    assert "suction_contact" in names
 
 
 def test_get_task_spec_unknown_raises() -> None:
@@ -126,6 +129,37 @@ def test_make_lift_suction_task_raw_smoke() -> None:
     env = make_task(
         "lift_suction",
         config=LiftSuctionTaskConfig(time_limit=2, seed=0),
+    )
+    obs = env.reset(seed=0)
+    assert obs.shape == (env.observation_dim,)
+
+    step = env.step(np.zeros(env.action_dim, dtype=np.float32))
+    assert step.obs.shape == (env.observation_dim,)
+    env.close()
+
+
+def test_lift_suction_cfg_registry_exposes_profiles() -> None:
+    """Lift-suction should expose named config profiles like reach."""
+    names = list_lift_suction_cfgs()
+    assert "ur3e_lift_suction" in names
+    assert "ur3e_suction_contact" in names
+    cfg = get_lift_suction_cfg("ur3e_lift_suction")
+    assert isinstance(cfg, LiftSuctionTaskConfig)
+    assert cfg.actuator_profile == "ur3e"
+
+
+def test_lift_suction_cfg_registry_unknown_raises() -> None:
+    """Unknown lift-suction profile names should raise a clear error."""
+    with pytest.raises(ValueError):
+        get_lift_suction_cfg("does-not-exist")
+
+
+def test_make_suction_contact_task_raw_smoke() -> None:
+    """Suction-contact factory should build and step."""
+    cfg = get_lift_suction_cfg("ur3e_suction_contact")
+    env = make_task(
+        "suction_contact",
+        config=cfg,
     )
     obs = env.reset(seed=0)
     assert obs.shape == (env.observation_dim,)

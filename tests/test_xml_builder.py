@@ -7,6 +7,7 @@ import xml.etree.ElementTree as ET
 import pytest
 
 from mujoco_robot.core.xml_builder import build_reach_xml
+from mujoco_robot.tasks.lift_suction.lift_suction_env import URLiftSuctionEnv
 
 
 _ROBOT_XML_NO_TABLE = """
@@ -83,3 +84,31 @@ def test_build_reach_xml_normalizes_existing_scene_furniture() -> None:
     assert len(root.findall("./worldbody/geom[@name='floor']")) == 1
     assert len(root.findall("./worldbody/geom[@name='table_leg_fl']")) == 1
     assert len(root.findall("./worldbody/geom[@name='robot_pedestal']")) == 1
+
+
+def test_lift_suction_xml_uses_same_canonical_table_as_reach() -> None:
+    """Lift-suction scene should use the same canonical table helper as reach."""
+    env = URLiftSuctionEnv.__new__(URLiftSuctionEnv)
+    env.render_size = (320, 240)
+    model_xml = env._build_env_xml(_ROBOT_XML_NO_TABLE)
+    root = ET.fromstring(model_xml)
+
+    table = root.find("./worldbody/geom[@name='table']")
+    floor = root.find("./worldbody/geom[@name='floor']")
+    assert table is not None
+    assert floor is not None
+
+    table_pos = [float(v) for v in table.get("pos", "").split()]
+    table_size = [float(v) for v in table.get("size", "").split()]
+    assert table_size == pytest.approx([0.45, 0.55, 0.02], abs=1e-4)
+    # Base is at z=0.80 in _ROBOT_XML_NO_TABLE so table top should match.
+    assert (table_pos[2] + table_size[2]) == pytest.approx(0.80, abs=1e-4)
+
+    # Canonical furniture pieces from ensure_spawn_table().
+    assert root.find("./worldbody/geom[@name='robot_pedestal']") is not None
+    assert root.find("./worldbody/geom[@name='table_apron_n']") is not None
+    assert root.find("./worldbody/geom[@name='table_leg_fl']") is not None
+
+    table_top_mat = root.find("./asset/material[@name='scene_table_top_mat']")
+    assert table_top_mat is not None
+    assert table_top_mat.get("rgba") == "0.04 0.04 0.04 1"
