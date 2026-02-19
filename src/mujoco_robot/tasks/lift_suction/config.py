@@ -46,7 +46,7 @@ def make_ur3e_suction_contact_cfg() -> LiftSuctionTaskConfig:
     return LiftSuctionTaskConfig(
         model_path=robot.model_path,
         actuator_profile="ur3e",
-        time_limit=300,
+        time_limit=1000,
         env_kwargs={
             "contact_success_hold_steps": 100,
             "contact_spawn_jitter_xy": 0.02,

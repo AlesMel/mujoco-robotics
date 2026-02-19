@@ -22,7 +22,7 @@ from mujoco_robot.tasks import (
 from mujoco_robot.training.callbacks import BestEpisodeVideoCallback
 
 
-DEFAULT_CFG_NAME = "ur3e_lift_suction_dense_stable"
+DEFAULT_CFG_NAME = "ur3e_suction_contact_dense_stable"
 
 
 def train_suction_ppo(

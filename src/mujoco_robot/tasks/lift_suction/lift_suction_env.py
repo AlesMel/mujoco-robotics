@@ -4,6 +4,7 @@ This environment models a single-object lifting task:
 - control UR3e in Cartesian delta-space + yaw
 - toggle suction on/off
 - pick one cube and lift it to a target height
+- suction force is applied through a MuJoCo ``adhesion`` actuator
 
 The EPick body uses the real STL mesh from the ROS2 EPick description package,
 with collision and suction-cup dimensions mirrored from that xacro.
@@ -228,6 +229,19 @@ class URLiftSuctionEnv:
         ee_step: float = 0.05,
         yaw_step: float = 0.5,
         suction_radius: float = 0.03,
+        adhesion_gain: float = 40.0,
+        suction_contact_margin: float = 0.004,
+        suction_contact_gap: float = 0.002,
+        suction_detach_dist_scale: float = 1.8,
+        top_pick_only: bool = True,
+        top_pick_lateral_scale: float = 0.85,
+        top_pick_max_gap: float = 0.015,
+        top_pick_penetration_allowance: float = 0.004,
+        suction_alignment_cos_min: float = 0.65,
+        suction_attach_stochastic: bool = True,
+        suction_success_prob_floor: float = 0.10,
+        suction_success_prob_ceiling: float = 0.98,
+        suction_attach_fail_penalty: float = 0.02,
         lift_height: float = 0.18,
         render_size: Tuple[int, int] = (960, 720),
         seed: Optional[int] = None,
@@ -241,6 +255,12 @@ class URLiftSuctionEnv:
         self.ee_step = float(ee_step)
         self.yaw_step = float(yaw_step)
         self.suction_radius = float(suction_radius)
+        self.adhesion_gain = float(max(0.0, adhesion_gain))
+        self.suction_contact_margin = float(max(0.0, suction_contact_margin))
+        self.suction_contact_gap = float(
+            np.clip(suction_contact_gap, 0.0, self.suction_contact_margin)
+        )
+        self.suction_detach_dist_scale = float(max(1.0, suction_detach_dist_scale))
         self.lift_height = float(lift_height)
         self.render_size = render_size
         self.settle_steps = int(max(0, settle_steps))
@@ -258,6 +278,26 @@ class URLiftSuctionEnv:
         )
         self.spawn_xy_bounds = (-0.02, 0.35, -0.20, 0.20)
         self.obj_half = np.array([0.02, 0.02, 0.02], dtype=float)
+        self.top_pick_only = bool(top_pick_only)
+        self.top_pick_lateral_scale = float(max(0.1, top_pick_lateral_scale))
+        self.top_pick_max_gap = float(max(0.001, top_pick_max_gap))
+        self.top_pick_penetration_allowance = float(
+            max(0.0, top_pick_penetration_allowance)
+        )
+        self.suction_alignment_cos_min = float(
+            np.clip(suction_alignment_cos_min, 0.0, 0.999)
+        )
+        self.suction_attach_stochastic = bool(suction_attach_stochastic)
+        self.suction_success_prob_floor = float(np.clip(suction_success_prob_floor, 0.0, 1.0))
+        self.suction_success_prob_ceiling = float(
+            np.clip(
+                max(suction_success_prob_ceiling, self.suction_success_prob_floor), 0.0, 1.0
+            )
+        )
+        self.suction_attach_fail_penalty = float(max(0.0, suction_attach_fail_penalty))
+        self.suction_top_lateral_limit = float(
+            min(self.suction_radius, self.top_pick_lateral_scale * np.min(self.obj_half[:2]))
+        )
 
         # Align robot home posture and spawn workspace with reach task defaults.
         robot_name = actuator_profile
@@ -308,6 +348,13 @@ class URLiftSuctionEnv:
         self.goal_body_id = mujoco.mj_name2id(
             self.model, mujoco.mjtObj.mjOBJ_BODY, "lift_goal"
         )
+        self.suction_adhesion_actuator_id = mujoco.mj_name2id(
+            self.model, mujoco.mjtObj.mjOBJ_ACTUATOR, "suction_adhesion"
+        )
+        if self.suction_adhesion_actuator_id < 0:
+            raise ValueError(
+                "Lift-suction MJCF is missing required 'suction_adhesion' actuator."
+            )
 
         actuator_handles = resolve_robot_actuators(self.model, self.actuator_profile)
         self.robot_joints = list(actuator_handles.joint_names)
@@ -327,7 +374,6 @@ class URLiftSuctionEnv:
         self.step_id = 0
         self.suction_on = False
         self.grasped = False
-        self._grasp_offset = np.zeros(3, dtype=float)
         self._target_yaw = 0.0
         self._last_targets = self.init_q.copy()
         self._last_action = np.zeros(self.action_dim, dtype=np.float32)
@@ -335,6 +381,11 @@ class URLiftSuctionEnv:
         self._goal_pos = np.zeros(3, dtype=float)
         self._last_reward = 0.0
         self._last_step_info: Dict[str, float | bool] = {}
+        self._last_attach_attempted = False
+        self._last_attach_success = False
+        self._last_attach_eligible = False
+        self._last_attach_prob = 0.0
+        self._last_attach_quality = 0.0
 
     # ------------------------------------------------------------------ XML
     def _load_robot_xml(self, path: str) -> str:
@@ -443,6 +494,8 @@ class URLiftSuctionEnv:
                 "contype": "1",
                 "conaffinity": "1",
                 "friction": "1.2 0.1 0.02",
+                "margin": f"{self.suction_contact_margin:.6f}",
+                "gap": f"{self.suction_contact_gap:.6f}",
                 "mass": "0",
             },
         )
@@ -483,6 +536,20 @@ class URLiftSuctionEnv:
                 "rgba": "0.9 0.25 0.2 1",
                 "friction": "1.1 0.1 0.03",
                 "mass": "0.08",
+            },
+        )
+
+        actuator = root.find("actuator")
+        if actuator is None:
+            actuator = ET.SubElement(root, "actuator")
+        ET.SubElement(
+            actuator,
+            "adhesion",
+            {
+                "name": "suction_adhesion",
+                "body": "robotiq_epick_suction_cup",
+                "gain": f"{self.adhesion_gain:.6f}",
+                "ctrlrange": "0 1",
             },
         )
 
@@ -544,10 +611,14 @@ class URLiftSuctionEnv:
         self.step_id = 0
         self.suction_on = False
         self.grasped = False
-        self._grasp_offset[:] = 0.0
         self._last_action[:] = 0.0
         self._last_reward = 0.0
         self._last_step_info = {}
+        self._last_attach_attempted = False
+        self._last_attach_success = False
+        self._last_attach_eligible = False
+        self._last_attach_prob = 0.0
+        self._last_attach_quality = 0.0
 
         for qi, (qpos_adr, dof_adr, act_id) in enumerate(
             zip(self._robot_qpos_ids, self.robot_dofs, self.robot_actuators)
@@ -557,6 +628,7 @@ class URLiftSuctionEnv:
             self.data.ctrl[act_id] = self.init_q[qi]
 
         self._last_targets = self.init_q.copy()
+        self.data.ctrl[self.suction_adhesion_actuator_id] = 0.0
 
         self._spawn_pos = self._sample_object_spawn()
         qadr = int(self.model.jnt_qposadr[self.obj_free_id])
@@ -622,42 +694,142 @@ class URLiftSuctionEnv:
         return out
 
     # ------------------------------------------------------------------ Suction
-    def _apply_suction_weld(self) -> None:
-        if not self.grasped:
-            return
-        qadr = int(self.model.jnt_qposadr[self.obj_free_id])
-        vad = int(self.model.jnt_dofadr[self.obj_free_id])
-        target_pos = self._suction_pos() + self._grasp_offset
-        self.data.qpos[qadr: qadr + 3] = target_pos
-        self.data.qvel[vad: vad + 6] = 0.0
+    def _set_suction_adhesion_ctrl(self, ctrl: float) -> None:
+        self.data.ctrl[self.suction_adhesion_actuator_id] = float(np.clip(ctrl, 0.0, 1.0))
 
-    def _update_suction(self, suction_pressed: bool) -> float:
+    def _suction_contact_metrics(self) -> Dict[str, float | bool]:
+        obj_pos = self.data.xpos[self.obj_body_id].copy()
+        suction_pos = self._suction_pos()
+        rel_world = suction_pos - obj_pos
+        obj_rot = self.data.xmat[self.obj_body_id].reshape(3, 3)
+        rel_local = obj_rot.T @ rel_world
+
+        lateral_error = float(np.linalg.norm(rel_local[:2]))
+        top_gap = float(rel_local[2] - self.obj_half[2])
+        cup_obj_dist = float(np.linalg.norm(rel_world))
+
+        cup_axis = self.data.site_xmat[self.suction_site].reshape(3, 3)[:, 2]
+        top_normal = obj_rot[:, 2]
+        alignment_cos = float(abs(np.dot(cup_axis, top_normal)))
+
+        top_window_ok = bool(
+            (-self.top_pick_penetration_allowance <= top_gap) and (top_gap <= self.top_pick_max_gap)
+        )
+        lateral_ok = bool(lateral_error <= self.suction_top_lateral_limit)
+        alignment_ok = bool(alignment_cos >= self.suction_alignment_cos_min)
+        in_radius = bool(cup_obj_dist <= self.suction_radius)
+
+        if self.top_pick_only:
+            attach_eligible = bool(in_radius and top_window_ok and lateral_ok and alignment_ok)
+        else:
+            attach_eligible = in_radius
+
+        lateral_score = float(
+            np.clip(1.0 - (lateral_error / max(self.suction_top_lateral_limit, 1e-6)), 0.0, 1.0)
+        )
+        if top_gap >= 0.0:
+            gap_scale = max(0.5 * self.top_pick_max_gap, 1e-6)
+            gap_score = float(np.exp(-((top_gap / gap_scale) ** 2)))
+        else:
+            pen_scale = max(self.top_pick_penetration_allowance, 1e-6)
+            gap_score = float(np.exp(-((abs(top_gap) / pen_scale) ** 2)))
+        align_scale = max(1.0 - self.suction_alignment_cos_min, 1e-6)
+        align_score = float(
+            np.clip((alignment_cos - self.suction_alignment_cos_min) / align_scale, 0.0, 1.0)
+        )
+        attach_quality = float(
+            np.clip(0.50 * lateral_score + 0.30 * align_score + 0.20 * gap_score, 0.0, 1.0)
+        )
+
+        if attach_eligible:
+            if self.suction_attach_stochastic:
+                attach_probability = float(
+                    np.clip(
+                        self.suction_success_prob_floor
+                        + (self.suction_success_prob_ceiling - self.suction_success_prob_floor)
+                        * attach_quality,
+                        0.0,
+                        1.0,
+                    )
+                )
+            else:
+                attach_probability = 1.0
+        else:
+            attach_probability = 0.0
+
+        return {
+            "cup_obj_dist": cup_obj_dist,
+            "suction_top_gap": top_gap,
+            "suction_lateral_error": lateral_error,
+            "suction_alignment_cos": alignment_cos,
+            "suction_attach_quality": attach_quality,
+            "suction_attach_prob": attach_probability,
+            "suction_attach_eligible": attach_eligible,
+            "suction_top_window_ok": top_window_ok,
+            "suction_lateral_ok": lateral_ok,
+            "suction_alignment_ok": alignment_ok,
+            "suction_distance_ok": in_radius,
+        }
+
+    def _update_suction(self, suction_cmd: float) -> float:
         reward = 0.0
-        if not suction_pressed:
+        self._last_attach_attempted = False
+        self._last_attach_success = False
+        self._last_attach_eligible = False
+        self._last_attach_prob = 0.0
+        self._last_attach_quality = 0.0
+        suction_cmd = float(max(0.0, suction_cmd))
+
+        if suction_cmd <= 1e-6:
             self.suction_on = False
             self.grasped = False
+            self._set_suction_adhesion_ctrl(0.0)
             return reward
 
         self.suction_on = True
-        if not self.grasped:
-            obj_pos = self.data.xpos[self.obj_body_id]
-            suction_pos = self._suction_pos()
-            if np.linalg.norm(obj_pos - suction_pos) < self.suction_radius:
-                self.grasped = True
-                self._grasp_offset = obj_pos - suction_pos
-                reward += 0.25
+        metrics = self._suction_contact_metrics()
 
-        self._apply_suction_weld()
+        if self.grasped:
+            lost_seal = bool(
+                float(metrics["cup_obj_dist"]) > (self.suction_radius * self.suction_detach_dist_scale)
+            )
+            if self.top_pick_only:
+                lost_seal = bool(
+                    lost_seal
+                    or float(metrics["suction_lateral_error"]) > (self.suction_top_lateral_limit * 1.8)
+                    or float(metrics["suction_top_gap"]) > (self.top_pick_max_gap * 2.5)
+                )
+            if lost_seal:
+                self.grasped = False
+
+        if not self.grasped:
+            self._last_attach_attempted = True
+            self._last_attach_eligible = bool(metrics["suction_attach_eligible"])
+            self._last_attach_prob = float(metrics["suction_attach_prob"])
+            self._last_attach_quality = float(metrics["suction_attach_quality"])
+
+            if self._last_attach_eligible and self._rng.uniform() <= self._last_attach_prob:
+                self.grasped = True
+                self._last_attach_success = True
+                reward += 0.25
+            elif (
+                self.suction_attach_fail_penalty > 0.0
+                and bool(metrics["suction_distance_ok"])
+                and self.suction_on
+            ):
+                reward -= self.suction_attach_fail_penalty
+
+        self._set_suction_adhesion_ctrl(suction_cmd if self.grasped else 0.0)
         return reward
 
     # ------------------------------------------------------------------ Reward / obs
     def _compute_reward(self) -> Tuple[float, bool, Dict]:
         obj_pos = self.data.xpos[self.obj_body_id].copy()
-        suction_pos = self._suction_pos()
+        suction_metrics = self._suction_contact_metrics()
         qvel_adr = int(self.model.jnt_dofadr[self.obj_free_id])
         obj_vel = self.data.qvel[qvel_adr: qvel_adr + 3]
 
-        cup_obj_dist = float(np.linalg.norm(suction_pos - obj_pos))
+        cup_obj_dist = float(suction_metrics["cup_obj_dist"])
         obj_goal_dist = float(np.linalg.norm(obj_pos - self._goal_pos))
         lifted = float(max(0.0, obj_pos[2] - self._spawn_pos[2]))
 
@@ -681,11 +853,18 @@ class URLiftSuctionEnv:
             "time_out": time_out,
             "grasped": bool(self.grasped),
             "suction_on": bool(self.suction_on),
+            "suction_ctrl": float(self.data.ctrl[self.suction_adhesion_actuator_id]),
             "cup_obj_dist": cup_obj_dist,
             "obj_goal_dist": obj_goal_dist,
             "object_height": float(obj_pos[2]),
             "goal_height": float(self._goal_pos[2]),
+            "suction_last_attach_attempted": bool(self._last_attach_attempted),
+            "suction_last_attach_success": bool(self._last_attach_success),
+            "suction_last_attach_eligible": bool(self._last_attach_eligible),
+            "suction_last_attach_prob": float(self._last_attach_prob),
+            "suction_last_attach_quality": float(self._last_attach_quality),
         }
+        info.update(suction_metrics)
         return float(reward), done, info
 
     def _observe(self) -> np.ndarray:
@@ -731,7 +910,7 @@ class URLiftSuctionEnv:
 
         delta_pos = act[:3] * self.ee_step
         dyaw = float(act[3] * self.yaw_step)
-        suction_pressed = bool(act[4] > 0.0)
+        suction_cmd = float(np.clip(act[4], 0.0, 1.0))
 
         target_pos, target_yaw = self._desired_ee(delta_pos, dyaw)
         qvel_cmd = self._ik_cartesian(target_pos, target_yaw)
@@ -747,11 +926,9 @@ class URLiftSuctionEnv:
         for k, act_id in enumerate(self.robot_actuators):
             self.data.ctrl[act_id] = qpos_targets[k]
 
-        reward = self._update_suction(suction_pressed)
-        self._apply_suction_weld()
+        reward = self._update_suction(suction_cmd)
         for _ in range(self.n_substeps):
             mujoco.mj_step(self.model, self.data)
-            self._apply_suction_weld()
 
         shaped, done, info = self._compute_reward()
         reward += shaped
@@ -778,7 +955,15 @@ class URLiftSuctionEnv:
             "",
             f"Grasped:    {bool(info.get('grasped', self.grasped))}",
             f"Suction on: {bool(info.get('suction_on', self.suction_on))}",
+            f"Suction u:  {float(info.get('suction_ctrl', np.nan)):.2f}",
             f"Cup->Obj:   {float(info.get('cup_obj_dist', np.nan)):.4f} m",
+            f"Lateral err:{float(info.get('suction_lateral_error', np.nan)):.4f} m",
+            f"Top gap:    {float(info.get('suction_top_gap', np.nan)):.4f} m",
+            f"Align cos:  {float(info.get('suction_alignment_cos', np.nan)):.3f}",
+            f"Attach p/q: {float(info.get('suction_attach_prob', np.nan)):.2f} / "
+            f"{float(info.get('suction_attach_quality', np.nan)):.2f}",
+            f"Top-gate:   {bool(info.get('suction_attach_eligible', False))}",
+            f"Last attach:{bool(info.get('suction_last_attach_success', False))}",
             f"Obj->Goal:  {float(info.get('obj_goal_dist', np.nan)):.4f} m",
             f"Obj height: {float(info.get('object_height', np.nan)):.4f} m",
             f"Goal hgt:   {float(info.get('goal_height', np.nan)):.4f} m",
@@ -881,12 +1066,12 @@ class URLiftSuctionContactEnv(URLiftSuctionEnv):
 
     def _compute_reward(self) -> Tuple[float, bool, Dict]:
         obj_pos = self.data.xpos[self.obj_body_id].copy()
-        suction_pos = self._suction_pos()
+        suction_metrics = self._suction_contact_metrics()
         qvel_adr = int(self.model.jnt_dofadr[self.obj_free_id])
         obj_vel = self.data.qvel[qvel_adr: qvel_adr + 3]
         obj_speed = float(np.linalg.norm(obj_vel))
 
-        cup_obj_dist = float(np.linalg.norm(suction_pos - obj_pos))
+        cup_obj_dist = float(suction_metrics["cup_obj_dist"])
         reward = -0.002
         reward -= 1.2 * cup_obj_dist
         if self.suction_on:
@@ -922,6 +1107,7 @@ class URLiftSuctionContactEnv(URLiftSuctionEnv):
             "time_out": time_out,
             "grasped": bool(self.grasped),
             "suction_on": bool(self.suction_on),
+            "suction_ctrl": float(self.data.ctrl[self.suction_adhesion_actuator_id]),
             "cup_obj_dist": cup_obj_dist,
             "obj_goal_dist": float(np.linalg.norm(obj_pos - self._goal_pos)),
             "object_height": float(obj_pos[2]),
@@ -930,6 +1116,12 @@ class URLiftSuctionContactEnv(URLiftSuctionEnv):
             "dropped": dropped,
             "contact_hold_steps": int(self._contact_hold_steps),
             "contact_hold_steps_required": int(self.contact_success_hold_steps),
+            "suction_last_attach_attempted": bool(self._last_attach_attempted),
+            "suction_last_attach_success": bool(self._last_attach_success),
+            "suction_last_attach_eligible": bool(self._last_attach_eligible),
+            "suction_last_attach_prob": float(self._last_attach_prob),
+            "suction_last_attach_quality": float(self._last_attach_quality),
         }
+        info.update(suction_metrics)
         self._prev_grasped = bool(self.grasped)
         return float(reward), done, info
