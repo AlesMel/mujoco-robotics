@@ -21,6 +21,11 @@ from mujoco_robot.tasks.slot_sorter import (
     make_slot_sorter_env,
     make_slot_sorter_gymnasium,
 )
+from mujoco_robot.tasks.cable_routing import (
+    CableRoutingTaskConfig,
+    make_cable_routing_env,
+    make_cable_routing_gymnasium,
+)
 
 
 @dataclass(frozen=True)
@@ -62,6 +67,13 @@ TASK_REGISTRY: Dict[str, TaskSpec] = {
         config_type=LiftSuctionTaskConfig,
         make_raw=make_lift_suction_contact_env,
         make_gymnasium=make_lift_suction_contact_gymnasium,
+    ),
+    "cable_routing": TaskSpec(
+        name="cable_routing",
+        description="UR3e deformable cable routing through sequential board clips.",
+        config_type=CableRoutingTaskConfig,
+        make_raw=make_cable_routing_env,
+        make_gymnasium=make_cable_routing_gymnasium,
     ),
 }
 

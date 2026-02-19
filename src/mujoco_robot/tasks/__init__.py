@@ -20,6 +20,13 @@ from mujoco_robot.tasks.slot_sorter import (
     make_slot_sorter_env,
     make_slot_sorter_gymnasium,
 )
+from mujoco_robot.tasks.cable_routing import (
+    CableRoutingTaskConfig,
+    get_cable_routing_cfg,
+    list_cable_routing_cfgs,
+    make_cable_routing_env,
+    make_cable_routing_gymnasium,
+)
 from mujoco_robot.tasks.registry import (
     TaskSpec,
     TASK_REGISTRY,
@@ -56,6 +63,11 @@ __all__ = [
     "SlotSorterTaskConfig",
     "make_slot_sorter_env",
     "make_slot_sorter_gymnasium",
+    "CableRoutingTaskConfig",
+    "get_cable_routing_cfg",
+    "list_cable_routing_cfgs",
+    "make_cable_routing_env",
+    "make_cable_routing_gymnasium",
     "TaskSpec",
     "TASK_REGISTRY",
     "get_task_spec",

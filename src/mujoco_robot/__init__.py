@@ -110,3 +110,12 @@ gymnasium.register(
     ),
     max_episode_steps=200,
 )
+
+gymnasium.register(
+    id="MuJoCoRobot/Cable-Routing-v0",
+    entry_point=(
+        "mujoco_robot.tasks.cable_routing.cable_routing_env:"
+        "CableRoutingGymnasium"
+    ),
+    max_episode_steps=450,
+)

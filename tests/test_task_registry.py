@@ -9,11 +9,15 @@ import gymnasium
 import mujoco_robot  # noqa: F401  # ensures Gym IDs are registered
 from mujoco_robot.tasks.lift_suction import URLiftSuctionEnv
 from mujoco_robot.tasks.slot_sorter import URSlotSorterEnv
+from mujoco_robot.tasks.cable_routing import URCableRoutingEnv
 from mujoco_robot.tasks import (
+    CableRoutingTaskConfig,
     LiftSuctionTaskConfig,
     ReachEnvCfg,
     SlotSorterTaskConfig,
+    get_cable_routing_cfg,
     get_lift_suction_cfg,
+    list_cable_routing_cfgs,
     get_task_spec,
     list_lift_suction_cfgs,
     list_tasks,
@@ -33,6 +37,12 @@ def test_lift_suction_env_class_importable() -> None:
     assert callable(URLiftSuctionEnv)
 
 
+def test_cable_routing_env_class_importable() -> None:
+    """URCableRoutingEnv should be importable from tasks.cable_routing."""
+    assert URCableRoutingEnv is not None
+    assert callable(URCableRoutingEnv)
+
+
 def test_task_registry_lists_builtin_tasks() -> None:
     """Registry should expose all core tasks."""
     names = list_tasks()
@@ -40,6 +50,7 @@ def test_task_registry_lists_builtin_tasks() -> None:
     assert "slot_sorter" in names
     assert "lift_suction" in names
     assert "suction_contact" in names
+    assert "cable_routing" in names
 
 
 def test_get_task_spec_unknown_raises() -> None:
@@ -172,6 +183,48 @@ def test_make_suction_contact_task_raw_smoke() -> None:
 def test_lift_suction_gym_registration_smoke() -> None:
     """Registered lift-suction Gym ID should construct and step."""
     env = gymnasium.make("MuJoCoRobot/Lift-Suction-v0")
+    obs, _ = env.reset(seed=0)
+    assert obs.shape == env.observation_space.shape
+
+    obs2, _reward, _terminated, _truncated, _info = env.step(
+        env.action_space.sample()
+    )
+    assert obs2.shape == env.observation_space.shape
+    env.close()
+
+
+def test_cable_routing_cfg_registry_exposes_profiles() -> None:
+    """Cable-routing should expose named config profiles."""
+    names = list_cable_routing_cfgs()
+    assert "ur3e_cable_routing" in names
+    cfg = get_cable_routing_cfg("ur3e_cable_routing")
+    assert isinstance(cfg, CableRoutingTaskConfig)
+    assert cfg.actuator_profile == "ur3e"
+
+
+def test_cable_routing_cfg_registry_unknown_raises() -> None:
+    """Unknown cable-routing profile names should raise a clear error."""
+    with pytest.raises(ValueError):
+        get_cable_routing_cfg("does-not-exist")
+
+
+def test_make_cable_routing_task_raw_smoke() -> None:
+    """Cable-routing task factory should build and step."""
+    env = make_task(
+        "cable_routing",
+        config=CableRoutingTaskConfig(time_limit=2, seed=0),
+    )
+    obs = env.reset(seed=0)
+    assert obs.shape == (env.observation_dim,)
+
+    step = env.step(np.zeros(env.action_dim, dtype=np.float32))
+    assert step.obs.shape == (env.observation_dim,)
+    env.close()
+
+
+def test_cable_routing_gym_registration_smoke() -> None:
+    """Registered cable-routing Gym ID should construct and step."""
+    env = gymnasium.make("MuJoCoRobot/Cable-Routing-v0")
     obs, _ = env.reset(seed=0)
     assert obs.shape == env.observation_space.shape
 

@@ -18,14 +18,14 @@ def main():
     p = argparse.ArgumentParser(description="Train PPO on UR robot tasks.")
     p.add_argument(
         "--task", type=str, default="reach",
-        choices=["reach", "slot_sorter"],
+        choices=["reach", "slot_sorter", "cable_routing"],
         help="Which task to train (default: reach).",
     )
     p.add_argument(
         "--cfg-name",
         type=str,
         default="ur3e_joint_pos_dense_stable",
-        help="Reach config profile name (for reach task).",
+        help="Config profile name (used by reach/cable_routing tasks).",
     )
     p.add_argument("--total-timesteps", type=int, default=500_000)
     p.add_argument("--n-envs", type=int, default=8)
@@ -49,6 +49,15 @@ def main():
             total_timesteps=args.total_timesteps,
             n_envs=args.n_envs,
             learning_rate=args.learning_rate,
+            save_video=args.save_video,
+            save_video_every=args.save_video_every,
+        )
+    elif args.task == "cable_routing":
+        from mujoco_robot.training.train_cable_routing import train_cable_routing_ppo
+        train_cable_routing_ppo(
+            cfg_name=args.cfg_name,
+            total_timesteps=args.total_timesteps,
+            n_envs=args.n_envs,
             save_video=args.save_video,
             save_video_every=args.save_video_every,
         )
