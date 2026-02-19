@@ -40,10 +40,19 @@ _EPICK_BODY_MESH = (
     / "epick"
     / "epick_body.stl"
 )
+# Real Robotiq e-Pick specs:
+#   Body length  : 102.3 mm   (unchanged)
+#   Body diameter: ~43 mm   → radius 21.5 mm
+#   Suction-cup face diameter: ~32 mm → radius 16 mm
 _EPICK_BODY_LENGTH = 0.1023
-_EPICK_BODY_COLLISION_RADIUS = 0.044
-_EPICK_CUP_RADIUS = 0.012
+_EPICK_BODY_COLLISION_RADIUS = 0.022   # 43 mm outer diameter
+_EPICK_CUP_RADIUS = 0.016             # 32 mm suction-face diameter
 _EPICK_CUP_HEIGHT = 0.015
+# Robotiq e-Pick mass (datasheet: 235 g)
+_EPICK_MASS = 0.235
+# Approximate principal inertia for a cylinder M=0.235 kg, R=0.022 m, H=0.1023 m
+_EPICK_INERTIA_XX = 0.00027   # kg·m²  (transverse)
+_EPICK_INERTIA_ZZ = 0.000057  # kg·m²  (axial)
 
 _FALLBACK_ROBOT_XML: str = ""
 try:
@@ -157,10 +166,10 @@ class URCableRoutingEnv:
         completion_bonus: float = 6.0,
         cable_points: int = 24,
         cable_radius: float = 0.005,
-        cable_joint_damping: float = 0.35,
+        cable_joint_damping: float = 1.5,
         cable_length: float = 0.24,
         clip_positions: Sequence[Sequence[float]] | None = None,
-        settle_steps: int = 300,
+        settle_steps: int = 500,
         zero_cable_velocity_on_reset: bool = True,
         render_size: Tuple[int, int] = (960, 720),
         seed: Optional[int] = None,
@@ -299,12 +308,19 @@ class URCableRoutingEnv:
 
         self.model.opt.timestep = 0.002
         self.model.opt.integrator = mujoco.mjtIntegrator.mjINT_IMPLICITFAST
-        self.model.opt.iterations = max(self.model.opt.iterations, 70)
-        self.model.opt.noslip_iterations = max(self.model.opt.noslip_iterations, 15)
+        # Cable contacts benefit from more constraint solver iterations.
+        self.model.opt.iterations = max(self.model.opt.iterations, 100)
+        self.model.opt.noslip_iterations = max(self.model.opt.noslip_iterations, 20)
         self.model.opt.gravity[:] = np.array([0.0, 0.0, -9.81])
 
+        self._camera_overview = self._resolve_camera_name(("route_overview", "top"))
+        self._camera_board = self._resolve_camera_name(("route_board", "top"))
+        self._camera_side = self._resolve_camera_name(("route_side", "side"))
+        self._camera_ee = self._resolve_camera_name(("ee_cam",))
+
         rw, rh = self.render_size
-        self._renderer_top = mujoco.Renderer(self.model, height=rh, width=rw)
+        self._renderer_overview = mujoco.Renderer(self.model, height=rh, width=rw)
+        self._renderer_board = mujoco.Renderer(self.model, height=rh, width=rw)
         self._renderer_side = mujoco.Renderer(self.model, height=rh, width=rw)
         self._renderer_ee = mujoco.Renderer(self.model, height=rh, width=rw)
 
@@ -415,6 +431,7 @@ class URCableRoutingEnv:
         set_framebuffer_size(root, self.render_size[0], self.render_size[1])
         ensure_spawn_table(root)
         inject_side_camera(root)
+        self._inject_task_cameras(root)
 
         asset = root.find("asset")
         if asset is None:
@@ -445,6 +462,21 @@ class URCableRoutingEnv:
                 "name": "epick_base_link",
                 "pos": "0 0.0921 0",
                 "quat": "0.70710678 -0.70710678 0 0",
+            },
+        )
+        # Give the e-Pick gripper its real mass (235 g) and inertia so that
+        # the robot arm controller sees realistic load dynamics.
+        ET.SubElement(
+            epick_base,
+            "inertial",
+            {
+                "mass": f"{_EPICK_MASS:.4f}",
+                "pos": f"0 0 {_EPICK_BODY_LENGTH / 2.0:.6f}",
+                "diaginertia": (
+                    f"{_EPICK_INERTIA_XX:.6f} "
+                    f"{_EPICK_INERTIA_XX:.6f} "
+                    f"{_EPICK_INERTIA_ZZ:.6f}"
+                ),
             },
         )
         epick_body = ET.SubElement(
@@ -664,7 +696,9 @@ class URCableRoutingEnv:
             {
                 "kind": "main",
                 "damping": f"{self.cable_joint_damping:.6f}",
-                "armature": "0.0002",
+                # Higher armature prevents near-singular inertia matrices that
+                # cause velocity blow-up in stiff cable simulations.
+                "armature": "0.001",
             },
         )
         ET.SubElement(
@@ -677,8 +711,10 @@ class URCableRoutingEnv:
                 "friction": "1.4 0.02 0.001",
                 "density": "1000",
                 "condim": "3",
-                "solref": "0.005 1",
-                "solimp": "0.95 0.98 0.001",
+                # solref[0] must be well above the timestep (0.002 s) to avoid
+                # stiff-contact instability; 0.02 s is a safe margin.
+                "solref": "0.02 1",
+                "solimp": "0.95 0.99 0.001",
             },
         )
         ET.SubElement(
@@ -705,6 +741,59 @@ class URCableRoutingEnv:
         )
 
         return ET.tostring(root, encoding="unicode")
+
+    def _inject_task_cameras(self, root: ET.Element) -> None:
+        worldbody = root.find("worldbody")
+        if worldbody is None:
+            return
+
+        def _remove_camera(name: str) -> None:
+            cam = worldbody.find(f"./camera[@name='{name}']")
+            if cam is not None:
+                worldbody.remove(cam)
+
+        for name in ("route_overview", "route_board", "route_side"):
+            _remove_camera(name)
+
+        ET.SubElement(
+            worldbody,
+            "camera",
+            {
+                "name": "route_overview",
+                "mode": "fixed",
+                "pos": "0.18 -0.62 1.45",
+                "xyaxes": "1 0 0 0 0.83 0.56",
+                "fovy": "50",
+            },
+        )
+        ET.SubElement(
+            worldbody,
+            "camera",
+            {
+                "name": "route_board",
+                "mode": "fixed",
+                "pos": "0.48 -0.34 1.08",
+                "xyaxes": "0.88 0.47 0 -0.22 0.42 0.88",
+                "fovy": "45",
+            },
+        )
+        ET.SubElement(
+            worldbody,
+            "camera",
+            {
+                "name": "route_side",
+                "mode": "fixed",
+                "pos": "0.88 -0.10 1.12",
+                "xyaxes": "0.20 0.98 0 -0.65 0.13 0.75",
+                "fovy": "50",
+            },
+        )
+
+    def _resolve_camera_name(self, candidates: Sequence[str]) -> str:
+        for name in candidates:
+            if mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_CAMERA, name) >= 0:
+                return name
+        raise ValueError(f"No camera found among candidates: {tuple(candidates)}")
 
     # ------------------------------------------------------------------ Helpers
     def _collect_named_ids(
@@ -1161,16 +1250,17 @@ class URCableRoutingEnv:
         return StepResult(self._observe(), reward, done, info)
 
     def _compose_multi_camera_frame(self) -> np.ndarray:
-        self._renderer_top.update_scene(self.data, camera="top")
-        frame_top = self._renderer_top.render()
-        self._renderer_side.update_scene(self.data, camera="side")
+        self._renderer_overview.update_scene(self.data, camera=self._camera_overview)
+        frame_overview = self._renderer_overview.render()
+        self._renderer_board.update_scene(self.data, camera=self._camera_board)
+        frame_board = self._renderer_board.render()
+        self._renderer_side.update_scene(self.data, camera=self._camera_side)
         frame_side = self._renderer_side.render()
-        self._renderer_ee.update_scene(self.data, camera="ee_cam")
+        self._renderer_ee.update_scene(self.data, camera=self._camera_ee)
         frame_ee = self._renderer_ee.render()
 
-        top_row = np.concatenate([frame_top, frame_side], axis=1)
-        blank = np.zeros_like(frame_ee)
-        bottom_row = np.concatenate([frame_ee, blank], axis=1)
+        top_row = np.concatenate([frame_overview, frame_board], axis=1)
+        bottom_row = np.concatenate([frame_side, frame_ee], axis=1)
         return np.concatenate([top_row, bottom_row], axis=0)
 
     def render(self, mode: str = "human") -> Optional[np.ndarray]:
@@ -1181,7 +1271,12 @@ class URCableRoutingEnv:
         raise ValueError("mode must be 'human' or 'rgb_array'")
 
     def close(self) -> None:
-        for renderer_name in ("_renderer_top", "_renderer_side", "_renderer_ee"):
+        for renderer_name in (
+            "_renderer_overview",
+            "_renderer_board",
+            "_renderer_side",
+            "_renderer_ee",
+        ):
             renderer = getattr(self, renderer_name, None)
             if renderer is None:
                 continue
