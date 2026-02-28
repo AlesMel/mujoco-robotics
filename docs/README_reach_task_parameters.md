@@ -57,8 +57,8 @@ Also in `src/mujoco_robot/envs/reach/reach_env_base.py`:
 
 Lower `actuator_kp` and/or higher `min_joint_damping` reduce oscillation near goals.
 Joint-position profiles are pre-tuned now:
-- `ur3e_joint_pos*`: `actuator_kp=100.0`, `min_joint_damping=24.0`, `min_joint_frictionloss=1.2`, `joint_target_ema_alpha=1.0`
-- `ur5e_joint_pos*`: `actuator_kp=120.0`, `min_joint_damping=24.0`, `min_joint_frictionloss=1.2`, `joint_target_ema_alpha=0.35`
+- `ur3e_joint_pos*`: `actuator_kp=500.0`, `min_joint_damping=20.0`, `min_joint_frictionloss=1.2`, `joint_target_ema_alpha=0.5`
+- `ur5e_joint_pos*`: `actuator_kp=120.0`, `min_joint_damping=24.0`, `min_joint_frictionloss=1.2`, `joint_target_ema_alpha=0.5`
 
 `joint_target_ema_alpha` is an action-side smoothing factor for joint-position
 targets (`1.0` = direct/no smoothing, lower values = smoother/slower response).

@@ -42,6 +42,45 @@ def test_urreach_control_variants_smoke(variant: str) -> None:
 
 
 @pytest.mark.parametrize(
+    "variant", ["ik_rel", "ik_abs", "joint_pos", "joint_pos_isaac_reward"]
+)
+def test_reach_default_observation_dim_includes_ori_error_vec(variant: str) -> None:
+    """Default reach observation should include ee_rot6d + goal_rot6d + 3D ori error."""
+    env = _make_variant_env(
+        variant,
+        robot="ur3e",
+        time_limit=0,
+        randomize_init=False,
+        obs_noise=0.0,
+        seed=0,
+    )
+    obs = env.reset(seed=0)
+    assert env.observation_dim == 36
+    assert obs.shape == (36,)
+    env.close()
+
+
+@pytest.mark.parametrize(
+    "variant", ["ik_rel", "ik_abs", "joint_pos", "joint_pos_isaac_reward"]
+)
+def test_reach_orientation_error_observation_matches_env_state(variant: str) -> None:
+    """Obs slot [27:30] should equal env orientation error vector."""
+    env = _make_variant_env(
+        variant,
+        robot="ur3e",
+        time_limit=0,
+        randomize_init=False,
+        obs_noise=0.0,
+        seed=0,
+    )
+    obs = env.reset(seed=0)
+    np.testing.assert_allclose(obs[27:30], env._orientation_error(), atol=1e-6)
+    step = env.step(np.zeros(env.action_dim, dtype=np.float32))
+    np.testing.assert_allclose(step.obs[27:30], env._orientation_error(), atol=1e-6)
+    env.close()
+
+
+@pytest.mark.parametrize(
     "env_id",
     [
         "MuJoCoRobot/Reach-v0",

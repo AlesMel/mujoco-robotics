@@ -152,7 +152,7 @@ def train_reach_skrl_ppo(
     stay_reward_weight: float = 0.05,
     resample_on_success: bool = False,
     seed: int = 42,
-    device: str = "cuda:0",
+    device: str = "auto",
 ) -> Any:
     """Train reach task with SKRL PPO using Isaac Lab-style PPO settings."""
     wrap_env, Runner = _require_skrl()
@@ -232,7 +232,7 @@ def main() -> None:
     p.add_argument("--stay-reward-weight", type=float, default=0.05)
     p.add_argument("--resample-on-success", action=argparse.BooleanOptionalAction, default=False)
     p.add_argument("--seed", type=int, default=42)
-    p.add_argument("--device", type=str, default="cuda:0")
+    p.add_argument("--device", type=str, default="auto")
     args = p.parse_args()
 
     train_reach_skrl_ppo(

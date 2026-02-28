@@ -155,9 +155,9 @@ class TestIKHoldHome:
 class TestIKReachAndHold:
     """Drive EE to a target, then hold with zero action — position must stay."""
 
-    POS_TOL = 0.40   # 40 cm — IK + PD controller steady-state (50 Hz, full 6-DOF)
-    ORI_TOL = 1.20   # ~69° — full 3-D orientation is harder to match exactly
-    HOLD_DRIFT_TOL = 0.25  # max drift during hold phase (IK drifts back toward home)
+    POS_TOL = 0.15   # 15 cm — IK + PD controller steady-state (50 Hz, full 6-DOF)
+    ORI_TOL = 0.60   # ~34° — full 3-D orientation tolerance
+    HOLD_DRIFT_TOL = 0.08  # max drift during hold phase
 
     def _targets_for_robot(self, robot: str):
         """Return a list of reachable (pos, quat) targets per robot.
@@ -225,8 +225,8 @@ class TestIKReachAndHold:
 class TestIKSequentialTargets:
     """Move through a sequence of targets; EE must hold each one."""
 
-    POS_TOL = 0.40
-    HOLD_DRIFT_TOL = 0.15  # Full-orientation IK adds position ripple during hold
+    POS_TOL = 0.15
+    HOLD_DRIFT_TOL = 0.08  # Full-orientation IK adds position ripple during hold
 
     @pytest.mark.parametrize("robot", ["ur5e", "ur3e"])
     def test_sequential_hold(self, robot):

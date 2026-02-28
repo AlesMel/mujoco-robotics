@@ -17,13 +17,28 @@ from .terms import (
 
 @dataclass(frozen=True)
 class ReachRewardCfg:
-    """High-level reward configuration for reach default terms."""
+    """High-level reward configuration for reach default terms.
+
+    Two-scale position reward (``dense_bounded`` mode):
+        A **broad** Gaussian (``dense_position_std``) provides gradient
+        from far away (10–30 cm), while an optional **fine** Gaussian
+        (``dense_position_fine_std``) adds a steep gradient in the last
+        few centimetres.  ``dense_position_fine_weight`` controls how
+        much of the total position budget goes to the fine term
+        (0.0 = all broad, 1.0 = all fine).  Set ``dense_position_fine_std``
+        to 0.0 to disable the fine term and use a single Gaussian.
+    """
 
     reward_mode: str = "dense_bounded"
-    dense_position_std: float = 0.05
-    dense_orientation_std: float = 0.2
-    dense_position_weight: float = 0.8
-    dense_orientation_weight: float = 0.2
+    dense_position_std: float = 0.15
+    dense_position_fine_std: float = 0.025
+    dense_position_fine_weight: float = 0.5
+    dense_orientation_std: float = 0.3
+    dense_orientation_fine_std: float = 0.15
+    dense_orientation_fine_weight: float = 0.4
+    dense_orientation_linear_weight: float = 0.2
+    dense_position_weight: float = 0.5
+    dense_orientation_weight: float = 0.5
     clip_to_unit_interval: bool = True
 
     # Legacy Isaac-style additive terms (used only when reward_mode="legacy_isaac")
@@ -52,7 +67,10 @@ def default_observation_terms() -> tuple[ObservationTermCfg, ...]:
     return (
         ObservationTermCfg(name="joint_pos", fn=observations.joint_pos_rel),
         ObservationTermCfg(name="joint_vel", fn=observations.joint_vel_rel),
-        ObservationTermCfg(name="pose_command", fn=observations.generated_commands_ee_pose),
+        ObservationTermCfg(name="ee_rot6d", fn=observations.ee_rot6d),
+        ObservationTermCfg(name="goal_pos_base", fn=observations.goal_pos_base),
+        ObservationTermCfg(name="goal_rot6d", fn=observations.goal_rot6d),
+        ObservationTermCfg(name="ori_error_vec", fn=observations.orientation_error_vec),
         ObservationTermCfg(name="actions", fn=observations.last_action),
     )
 
@@ -74,30 +92,68 @@ def default_reward_terms(
         pos_w /= total_w
         ori_w /= total_w
 
-        if abs(float(cfg.dense_position_std) - 0.05) < 1e-12:
-            pos_fn = rewards.position_command_error_exp
-        else:
-            pos_fn = rewards.position_command_error_exp_with_std(cfg.dense_position_std)
+        # --- Two-scale position reward ---
+        fine_std = float(getattr(cfg, "dense_position_fine_std", 0.0))
+        fine_frac = float(getattr(cfg, "dense_position_fine_weight", 0.5))
+        use_fine = fine_std > 1e-8 and fine_frac > 1e-8
+
+        broad_fn = rewards.position_command_error_exp_with_std(cfg.dense_position_std)
+        broad_w = pos_w * (1.0 - fine_frac) if use_fine else pos_w
         terms.append(
             RewardTermCfg(
                 name="dense_position_proximity",
-                fn=pos_fn,
-                weight=pos_w,
+                fn=broad_fn,
+                weight=broad_w,
             )
         )
+        if use_fine:
+            fine_fn = rewards.position_command_error_exp_with_std(fine_std)
+            terms.append(
+                RewardTermCfg(
+                    name="dense_position_fine",
+                    fn=fine_fn,
+                    weight=pos_w * fine_frac,
+                )
+            )
 
         if ori_w > 1e-12:
-            if abs(float(cfg.dense_orientation_std) - 0.2) < 1e-12:
-                ori_fn = rewards.orientation_command_error_exp
-            else:
-                ori_fn = rewards.orientation_command_error_exp_with_std(cfg.dense_orientation_std)
+            # --- Three-scale orientation reward ---
+            ori_fine_std = float(getattr(cfg, "dense_orientation_fine_std", 0.0))
+            ori_fine_frac = float(getattr(cfg, "dense_orientation_fine_weight", 0.4))
+            ori_linear_frac = float(getattr(cfg, "dense_orientation_linear_weight", 0.0))
+            use_ori_fine = ori_fine_std > 1e-8 and ori_fine_frac > 1e-8
+
+            # Remaining budget for broad tanh after fine + linear are carved out.
+            broad_frac = max(0.0, 1.0 - ori_fine_frac - ori_linear_frac) if (use_ori_fine or ori_linear_frac > 1e-8) else 1.0
+
+            # Broad: tanh-based — provides gradient even at large errors (~π rad)
+            broad_ori_fn = rewards.orientation_error_tanh_with_std(cfg.dense_orientation_std)
             terms.append(
                 RewardTermCfg(
                     name="dense_orientation_proximity",
-                    fn=ori_fn,
-                    weight=ori_w,
+                    fn=broad_ori_fn,
+                    weight=ori_w * broad_frac,
                 )
             )
+            if use_ori_fine:
+                fine_ori_fn = rewards.orientation_command_error_exp_with_std(ori_fine_std)
+                terms.append(
+                    RewardTermCfg(
+                        name="dense_orientation_fine",
+                        fn=fine_ori_fn,
+                        weight=ori_w * ori_fine_frac,
+                    )
+                )
+
+            # --- Linear orientation term: constant gradient at ALL distances ---
+            if ori_linear_frac > 1e-8:
+                terms.append(
+                    RewardTermCfg(
+                        name="dense_orientation_linear",
+                        fn=rewards.orientation_error_linear,
+                        weight=ori_w * ori_linear_frac,
+                    )
+                )
     elif reward_mode == "legacy_isaac":
         if abs(float(cfg.position_tanh_std) - 0.1) < 1e-12:
             position_tanh_fn = rewards.position_command_error_tanh

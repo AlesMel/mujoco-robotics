@@ -231,3 +231,115 @@ class BestEpisodeVideoCallback(BaseCallback):
             if self.verbose:
                 print(f"[video] new best return {ep_return:.3f}, "
                       f"updated {best_fname} (fps={fps})")
+
+
+class ReachEvalMetricsCallback(BaseCallback):
+    """Periodic deterministic eval for reach metrics independent of video cadence."""
+
+    def __init__(
+        self,
+        make_eval_env: Callable[[], gymnasium.Env],
+        eval_every_timesteps: int,
+        n_eval_episodes: int = 3,
+        deterministic: bool = True,
+        vec_norm: VecNormalize | None = None,
+        verbose: int = 0,
+    ):
+        super().__init__(verbose)
+        self.make_eval_env = make_eval_env
+        self.eval_every_timesteps = max(1, int(eval_every_timesteps))
+        self.n_eval_episodes = max(1, int(n_eval_episodes))
+        self.deterministic = bool(deterministic)
+        self.vec_norm = vec_norm
+        self.next_eval = self.eval_every_timesteps
+
+    def _on_step(self) -> bool:
+        while self.num_timesteps >= self.next_eval:
+            self._run_eval()
+            self.next_eval += self.eval_every_timesteps
+        return True
+
+    def _build_eval_env(self):
+        if self.vec_norm is None:
+            return self.make_eval_env()
+
+        raw_eval = DummyVecEnv([self.make_eval_env])
+        env = VecNormalize(
+            raw_eval,
+            training=False,
+            norm_obs=self.vec_norm.norm_obs,
+            norm_reward=False,
+            clip_obs=self.vec_norm.clip_obs,
+        )
+        env.obs_rms = self.vec_norm.obs_rms.copy()
+        if self.vec_norm.ret_rms is not None:
+            env.ret_rms = self.vec_norm.ret_rms.copy()
+        return env
+
+    def _run_eval(self) -> None:
+        env = self._build_eval_env()
+        returns: list[float] = []
+        successes: list[float] = []
+        final_dists: list[float] = []
+        final_ori_errs: list[float] = []
+
+        try:
+            for _ in range(self.n_eval_episodes):
+                obs = env.reset()
+                if isinstance(obs, tuple):
+                    obs = obs[0]
+
+                done = False
+                ep_return = 0.0
+                last_info: dict | None = None
+
+                while not done:
+                    action, _ = self.model.predict(obs, deterministic=self.deterministic)
+                    step_out = env.step(action)
+
+                    if len(step_out) == 5:
+                        obs, reward, terminated, truncated, info = step_out
+                        if isinstance(reward, np.ndarray):
+                            ep_return += float(reward[0])
+                            done = bool(terminated[0] or truncated[0])
+                            last_info = info[0] if isinstance(info, (list, tuple)) else info
+                        else:
+                            ep_return += float(reward)
+                            done = bool(terminated or truncated)
+                            last_info = info
+                    else:
+                        obs, reward, dones, infos = step_out
+                        if isinstance(reward, np.ndarray):
+                            ep_return += float(reward[0])
+                            done = bool(dones[0])
+                            last_info = infos[0] if isinstance(infos, (list, tuple)) else infos
+                        else:
+                            ep_return += float(reward)
+                            done = bool(dones)
+                            last_info = infos
+
+                info_dict = last_info if isinstance(last_info, dict) else {}
+                returns.append(float(ep_return))
+                hold_success = bool(
+                    info_dict.get("hold_success", info_dict.get("success", False))
+                )
+                successes.append(float(hold_success))
+                final_dists.append(float(info_dict.get("dist", np.nan)))
+                final_ori_errs.append(float(info_dict.get("ori_err", np.nan)))
+        finally:
+            env.close()
+
+        self.logger.record("eval/success_rate", float(np.mean(successes)))
+        self.logger.record("eval/mean_return", float(np.mean(returns)))
+        self.logger.record("eval/mean_dist", float(np.nanmean(final_dists)))
+        self.logger.record("eval/mean_ori_err", float(np.nanmean(final_ori_errs)))
+
+        if self.verbose:
+            print(
+                "[eval] "
+                f"step={self.num_timesteps} "
+                f"success_rate={np.mean(successes):.3f} "
+                f"mean_return={np.mean(returns):.3f} "
+                f"mean_dist={np.nanmean(final_dists):.4f} "
+                f"mean_ori={np.nanmean(final_ori_errs):.4f}"
+            )

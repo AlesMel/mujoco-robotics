@@ -31,7 +31,7 @@ class ActionCfg:
     ee_step: float = 0.06
     ori_step: float = 0.5
     ori_abs_max: float = 3.141592653589793
-    joint_action_scale: float = 0.5
+    joint_action_scale: float | tuple[float, ...] = 0.5
     # Optional smoothing for relative joint targets (0=no update, 1=no smoothing).
     joint_target_ema_alpha: float = 1.0
 

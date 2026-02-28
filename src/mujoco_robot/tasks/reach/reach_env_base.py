@@ -158,16 +158,19 @@ class URReachEnvBase:
     control variant (see ``reach_env_ik_rel.py``, ``reach_env_ik_abs.py``,
     ``reach_env_joint_pos.py``).
 
-    Observation (19 + action_dim = 25):
+    Observation (30 + action_dim = 36):
         ============== ===== ===================================
         Component      Dim   Description
         ============== ===== ===================================
         joint_pos        6   joint angles relative to home (noise ±0.01)
         joint_vel        6   joint velocities (noise ±0.01)
-        pose_command     7   goal pose in base frame (pos_xyz, quat_wxyz)
+        ee_rot6d         6   current EE orientation (6D continuous)
+        goal_pos         3   goal position in base frame
+        goal_rot6d       6   goal orientation (6D continuous)
+        ori_error_vec    3   orientation error (axis-angle, EE -> goal)
         actions          6   previous action (zeros at reset)
         ============== ===== ===================================
-        → total = 25   (matches Isaac Lab reach env exactly)
+        → total = 36
 
     Reward (default manager cfg):
         Dense bounded proximity in ``[0, 1]`` with configurable position/orientation
@@ -187,7 +190,7 @@ class URReachEnvBase:
         ee_step: float = 0.06,
         ori_step: float = 0.5,
         ori_abs_max: float = np.pi,
-        joint_action_scale: float = 0.5,
+        joint_action_scale: float | np.ndarray = 0.5,
         reach_threshold: float = 0.01,  # meters
         ori_threshold: float = 0.1,  # radians
         terminate_on_success: bool = False,
@@ -227,7 +230,9 @@ class URReachEnvBase:
         self.ee_step = ee_step
         self.ori_step = ori_step
         self.ori_abs_max = float(ori_abs_max)
-        self.joint_action_scale = joint_action_scale
+        self.joint_action_scale = np.atleast_1d(
+            np.asarray(joint_action_scale, dtype=float)
+        )
         self.obs_noise = obs_noise
         self.action_rate_weight = float(action_rate_weight)
         self.joint_vel_weight = joint_vel_weight
@@ -394,14 +399,14 @@ class URReachEnvBase:
 
     @property
     def observation_dim(self) -> int:
-        """Observation dimensionality: 19 base + action_dim (actions).
+        """Observation dimensionality: 30 base + action_dim (actions).
 
-        Matches Isaac Lab reach env: joint_pos(6) + joint_vel(6) +
-        pose_command(7) + actions(action_dim).
+        Current layout: joint_pos(6) + joint_vel(6) + ee_rot6d(6) +
+        goal_pos(3) + goal_rot6d(6) + ori_error_vec(3) + actions(action_dim).
         """
         if hasattr(self, "_manager_runtime") and self._manager_runtime.has("observation"):
             return int(self._manager("observation").dim)
-        return 19 + self.action_dim
+        return 30 + self.action_dim
 
     # Backward-compatible proxies — delegate to SuccessTracker
     @property

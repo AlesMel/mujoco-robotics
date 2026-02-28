@@ -74,6 +74,11 @@ def orientation_command_error_exp_with_std(std: float):
     return _fn
 
 
+def orientation_error_linear(_env, ctx: dict[str, float]) -> float:
+    """Linear orientation reward: 1 - err/π.  Constant gradient everywhere."""
+    return float(1.0 - min(ctx["ori_err"], math.pi) / math.pi)
+
+
 def orientation_error_tanh_std_02(env, ctx: dict[str, float]) -> float:
     return orientation_error_tanh(env, ctx, std=0.2)
 
