@@ -140,20 +140,36 @@ class CableRoutingGymnasium(gymnasium.Env):
             self._human_viewer = None
         self.base.close()
 
+    def apply_curriculum_stage(self, stage: int) -> int:
+        return self.base.apply_curriculum_stage(stage)
+
 
 class URCableRoutingEnv:
-    """Single-arm cable-routing environment with sequential clip objectives."""
+    """Single-arm cable-routing environment with sequential clip objectives.
+
+    Supports two task modes:
+
+    * ``"route"`` (default) – full cable-routing through clips.
+    * ``"grasp"`` – simplified reach-and-grasp subtask.  The episode
+      terminates as soon as the cable is grasped (or on timeout).  The
+      reward is a dense, distance-based signal similar to the reach task,
+      which PPO can learn in ~300-500 k steps.
+    """
+
+    VALID_TASK_MODES = ("route", "grasp")
 
     def __init__(
         self,
         model_path: str = _DEFAULT_MODEL,
         actuator_profile: str = "ur3e",
+        task_mode: str = "route",
         time_limit: int = 450,
         ee_step: float = 0.04,
         yaw_step: float = 0.45,
         suction_radius: float = 0.025,
-        suction_alignment_cos_min: float = 0.55,
+        suction_alignment_cos_min: float = 0.45,
         suction_detach_dist_scale: float = 1.6,
+        auto_suction_when_eligible: bool = True,
         suction_attach_stochastic: bool = True,
         suction_success_prob_floor: float = 0.20,
         suction_success_prob_ceiling: float = 0.99,
@@ -170,11 +186,20 @@ class URCableRoutingEnv:
         cable_length: float = 0.24,
         clip_positions: Sequence[Sequence[float]] | None = None,
         settle_steps: int = 500,
+        n_substeps: int = 5,
+        solver_iterations: int = 100,
+        solver_noslip_iterations: int = 20,
         zero_cable_velocity_on_reset: bool = True,
         render_size: Tuple[int, int] = (960, 720),
         seed: Optional[int] = None,
     ) -> None:
         self._rng = np.random.default_rng(seed)
+
+        if task_mode not in self.VALID_TASK_MODES:
+            raise ValueError(
+                f"task_mode must be one of {self.VALID_TASK_MODES}, got '{task_mode}'"
+            )
+        self.task_mode = task_mode
 
         self.model_path = model_path
         self.actuator_profile = actuator_profile
@@ -186,6 +211,7 @@ class URCableRoutingEnv:
             np.clip(suction_alignment_cos_min, 0.0, 0.999)
         )
         self.suction_detach_dist_scale = float(max(1.0, suction_detach_dist_scale))
+        self.auto_suction_when_eligible = bool(auto_suction_when_eligible)
         self.suction_attach_stochastic = bool(suction_attach_stochastic)
         self.suction_success_prob_floor = float(np.clip(suction_success_prob_floor, 0.0, 1.0))
         self.suction_success_prob_ceiling = float(
@@ -212,13 +238,15 @@ class URCableRoutingEnv:
 
         self.render_size = render_size
         self.settle_steps = int(max(0, settle_steps))
+        self.n_substeps = int(max(1, n_substeps))
+        self.solver_iterations = int(max(20, solver_iterations))
+        self.solver_noslip_iterations = int(max(0, solver_noslip_iterations))
 
         # Control / stability settings.
         self.max_joint_vel = 4.0
         self.ik_damping = 0.02
         self.ik_gain = 0.15
         self.hold_eps = 0.02
-        self.n_substeps = 5
         self.init_q = np.array(
             [-0.4147, -math.pi / 2.0, math.pi / 2.0, -math.pi / 2.0, -math.pi / 2.0, 0.0],
             dtype=float,
@@ -235,9 +263,9 @@ class URCableRoutingEnv:
 
         default_clip_xy = np.array(
             [
-                [0.08, -0.065],
+                [0.08, -0.030],
                 [0.12, 0.050],
-                [0.18, -0.045],
+                [0.18, -0.020],
                 [0.24, 0.055],
             ],
             dtype=float,
@@ -280,8 +308,8 @@ class URCableRoutingEnv:
         self.cable_initial_end = np.array(
             [
                 min(self.board_center[0] + self.board_half[0] - 0.01, self.anchor_position[0] + self.cable_length),
-                self.anchor_position[1] + 0.05,
-                self.anchor_position[2] + 0.006,
+                self.anchor_position[1] + 0.01,
+                self.anchor_position[2] + 0.020,
             ],
             dtype=float,
         )
@@ -308,9 +336,8 @@ class URCableRoutingEnv:
 
         self.model.opt.timestep = 0.002
         self.model.opt.integrator = mujoco.mjtIntegrator.mjINT_IMPLICITFAST
-        # Cable contacts benefit from more constraint solver iterations.
-        self.model.opt.iterations = max(self.model.opt.iterations, 100)
-        self.model.opt.noslip_iterations = max(self.model.opt.noslip_iterations, 20)
+        self.model.opt.iterations = self.solver_iterations
+        self.model.opt.noslip_iterations = self.solver_noslip_iterations
         self.model.opt.gravity[:] = np.array([0.0, 0.0, -9.81])
 
         self._camera_overview = self._resolve_camera_name(("route_overview", "top"))
@@ -318,11 +345,10 @@ class URCableRoutingEnv:
         self._camera_side = self._resolve_camera_name(("route_side", "side"))
         self._camera_ee = self._resolve_camera_name(("ee_cam",))
 
-        rw, rh = self.render_size
-        self._renderer_overview = mujoco.Renderer(self.model, height=rh, width=rw)
-        self._renderer_board = mujoco.Renderer(self.model, height=rh, width=rw)
-        self._renderer_side = mujoco.Renderer(self.model, height=rh, width=rw)
-        self._renderer_ee = mujoco.Renderer(self.model, height=rh, width=rw)
+        self._renderer_overview = None
+        self._renderer_board = None
+        self._renderer_side = None
+        self._renderer_ee = None
 
         self.ee_site = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_SITE, "ee_site")
         self.suction_site = mujoco.mj_name2id(
@@ -360,9 +386,9 @@ class URCableRoutingEnv:
         configure_position_actuators(
             self.model,
             actuator_handles,
-            min_damping=16.0,
-            min_frictionloss=1.0,
-            kp=120.0,
+            min_damping=24.0,
+            min_frictionloss=1.5,
+            kp=220.0,
         )
 
         self._cable_body_ids = self._collect_named_ids(
@@ -403,6 +429,17 @@ class URCableRoutingEnv:
         self._last_attach_prob = 0.0
         self._last_attach_quality = 0.0
         self._last_progress_advanced = False
+        self._prev_cup_free_dist = 0.0  # for velocity shaping in grasp mode
+
+        # Curriculum anchors (used to restore full task settings in stage 2).
+        self._base_suction_radius = float(self.suction_radius)
+        self._base_suction_alignment_cos_min = float(self.suction_alignment_cos_min)
+        self._base_suction_attach_stochastic = bool(self.suction_attach_stochastic)
+        self._base_clip_progress_bonus = float(self.clip_progress_bonus)
+        self._curriculum_stage = -1
+        self._pregrasp_reward_scale = 1.0
+        self._route_reward_scale = 1.0
+        self.apply_curriculum_stage(0)
 
     # ------------------------------------------------------------------ XML
     def _load_robot_xml(self, path: str) -> str:
@@ -420,8 +457,8 @@ class URCableRoutingEnv:
         for i in range(self.cable_points):
             t = i / max(self.cable_points - 1, 1)
             p = t * local_end
-            p[1] += 0.015 * math.sin(math.pi * t)
-            p[2] -= 0.010 * math.sin(math.pi * t)
+            p[1] -= 0.010 * math.sin(math.pi * t)
+            p[2] += 0.008 * math.sin(math.pi * t)
             vertices.extend([f"{p[0]:.5f}", f"{p[1]:.5f}", f"{p[2]:.5f}"])
         return " ".join(vertices)
 
@@ -432,6 +469,18 @@ class URCableRoutingEnv:
         ensure_spawn_table(root)
         inject_side_camera(root)
         self._inject_task_cameras(root)
+
+        contact = root.find("contact")
+        if contact is None:
+            contact = ET.SubElement(root, "contact")
+        ET.SubElement(
+            contact,
+            "exclude",
+            {
+                "body1": "base",
+                "body2": "shoulder",
+            },
+        )
 
         asset = root.find("asset")
         if asset is None:
@@ -709,7 +758,7 @@ class URCableRoutingEnv:
                 "size": f"{self.cable_radius:.6f}",
                 "rgba": "0.92 0.55 0.22 1",
                 "friction": "1.4 0.02 0.001",
-                "density": "1000",
+                "density": "650",
                 "condim": "3",
                 # solref[0] must be well above the timestep (0.002 s) to avoid
                 # stiff-contact instability; 0.02 s is a safe margin.
@@ -858,7 +907,7 @@ class URCableRoutingEnv:
     @property
     def observation_dim(self) -> int:
         """Observation dimensionality."""
-        return 38 + 3 * self.n_clips
+        return 41 + 3 * self.n_clips
 
     # ------------------------------------------------------------------ Reset
     def _table_top_z(self) -> float:
@@ -917,6 +966,10 @@ class URCableRoutingEnv:
 
         self._resolve_cable_endpoints_from_distance()
         self._prev_target_planar_dist = self._routing_metrics()["target_planar_dist"]
+        # Initialise previous cup-free distance for velocity shaping.
+        self._prev_cup_free_dist = float(
+            np.linalg.norm(self._suction_pos() - self._free_end_pos())
+        )
         return self._observe()
 
     # ------------------------------------------------------------------ IK + control
@@ -973,6 +1026,40 @@ class URCableRoutingEnv:
     # ------------------------------------------------------------------ Suction + routing
     def _set_suction_adhesion_ctrl(self, ctrl: float) -> None:
         self.data.ctrl[self.suction_adhesion_actuator_id] = float(np.clip(ctrl, 0.0, 1.0))
+
+    def apply_curriculum_stage(self, stage: int) -> int:
+        stage = int(np.clip(stage, 0, 2))
+        if stage == self._curriculum_stage:
+            return self._curriculum_stage
+
+        if stage == 0:
+            self.suction_radius = float(self._base_suction_radius * 1.35)
+            self.suction_alignment_cos_min = float(
+                max(0.20, self._base_suction_alignment_cos_min - 0.12)
+            )
+            self.suction_attach_stochastic = False
+            self.clip_progress_bonus = float(self._base_clip_progress_bonus * 0.35)
+            self._pregrasp_reward_scale = 1.60
+            self._route_reward_scale = 0.25
+        elif stage == 1:
+            self.suction_radius = float(self._base_suction_radius * 1.15)
+            self.suction_alignment_cos_min = float(
+                max(0.24, self._base_suction_alignment_cos_min - 0.05)
+            )
+            self.suction_attach_stochastic = bool(self._base_suction_attach_stochastic)
+            self.clip_progress_bonus = float(self._base_clip_progress_bonus * 0.75)
+            self._pregrasp_reward_scale = 1.20
+            self._route_reward_scale = 0.60
+        else:
+            self.suction_radius = float(self._base_suction_radius)
+            self.suction_alignment_cos_min = float(self._base_suction_alignment_cos_min)
+            self.suction_attach_stochastic = bool(self._base_suction_attach_stochastic)
+            self.clip_progress_bonus = float(self._base_clip_progress_bonus)
+            self._pregrasp_reward_scale = 1.00
+            self._route_reward_scale = 1.00
+
+        self._curriculum_stage = stage
+        return self._curriculum_stage
 
     def _free_end_contact_metrics(self) -> Dict[str, float | bool]:
         free_pos = self._free_end_pos()
@@ -1053,14 +1140,17 @@ class URCableRoutingEnv:
         self._last_attach_quality = 0.0
 
         suction_cmd = float(max(0.0, suction_cmd))
+        metrics = self._free_end_contact_metrics()
+
         if suction_cmd <= 1e-6:
-            self.suction_on = False
-            self.grasped = False
-            self._set_suction_adhesion_ctrl(0.0)
-            return reward
+            if not (self.auto_suction_when_eligible and bool(metrics["suction_attach_eligible"])):
+                self.suction_on = False
+                self.grasped = False
+                self._set_suction_adhesion_ctrl(0.0)
+                return reward
+            suction_cmd = 1.0
 
         self.suction_on = True
-        metrics = self._free_end_contact_metrics()
 
         if self.grasped:
             if float(metrics["cup_free_dist"]) > (self.suction_radius * self.suction_detach_dist_scale):
@@ -1115,6 +1205,64 @@ class URCableRoutingEnv:
 
     # ------------------------------------------------------------------ Reward / obs
     def _compute_reward(self) -> Tuple[float, bool, Dict]:
+        if self.task_mode == "grasp":
+            return self._compute_reward_grasp()
+        return self._compute_reward_route()
+
+    # ---- Grasp-only reward (dense, distance-based – similar to reach task) ----
+    def _compute_reward_grasp(self) -> Tuple[float, bool, Dict]:
+        cup_pos = self._suction_pos()
+        free_pos = self._free_end_pos()
+        free_vel = self._free_end_vel()
+        delta = free_pos - cup_pos
+        dist = float(np.linalg.norm(delta))
+
+        # 1) Dense distance shaping (potential): drives the agent toward
+        #    the cable free end.  Range roughly [-0.5, 0] for 0-50 cm.
+        reward = -dist
+
+        # 2) Velocity shaping: directly reward the step-to-step improvement
+        #    in distance.  This is the single most important signal for PPO
+        #    to learn directed movement (rather than random exploration).
+        #    Scale is ~10 × 6 cm step ≈ 0.6 max per step when moving straight.
+        approach_delta = self._prev_cup_free_dist - dist
+        reward += 10.0 * approach_delta
+        self._prev_cup_free_dist = dist
+
+        # 3) Additional proximity bonus once within 8 cm.
+        if dist < 0.08:
+            reward += 0.4 * (1.0 - dist / 0.08)
+
+        # Light action smoothness penalty.
+        reward -= 0.0005 * float(np.linalg.norm(self._last_action[:4]))
+
+        # Suction engagement encouragement.
+        if self.suction_on:
+            reward += 0.02
+
+        # Grasped – big reward & terminate.
+        success = False
+        if self.grasped:
+            reward += 5.0
+            success = True
+
+        time_out = bool(self.time_limit > 0 and self.step_id >= self.time_limit)
+        done = bool(success or time_out)
+
+        info = {
+            "success": success,
+            "time_out": time_out,
+            "grasped": bool(self.grasped),
+            "suction_on": bool(self.suction_on),
+            "cup_free_dist": dist,
+            "free_end_height": float(free_pos[2]),
+            "free_end_speed": float(np.linalg.norm(free_vel)),
+            "curriculum_stage": int(self._curriculum_stage),
+        }
+        return float(reward), done, info
+
+    # ---- Full routing reward (original two-phase) ----
+    def _compute_reward_route(self) -> Tuple[float, bool, Dict]:
         routing = self._routing_metrics()
         suction_metrics = self._free_end_contact_metrics()
 
@@ -1125,11 +1273,41 @@ class URCableRoutingEnv:
         target_dist = float(routing["target_planar_dist"])
         target_z_dist = float(routing["target_vertical_dist"])
         progress_fraction = float(self.routed_clip_count / self.n_clips)
+        attach_quality = float(suction_metrics["suction_attach_quality"])
+        cup_free_dist = float(suction_metrics["cup_free_dist"])
+        dist_norm = float(np.clip(cup_free_dist / max(self.suction_radius, 1e-6), 0.0, 2.0))
 
-        reward = -0.002
-        reward -= 0.75 * target_dist
-        reward -= 0.08 * target_z_dist
-        reward += 0.20 * progress_fraction
+        # Dense reaching shaping even for route mode – the agent should
+        # always feel a gradient toward the cable before grasping.
+        cup_pos = self._suction_pos()
+        reach_dist = float(np.linalg.norm(free_pos - cup_pos))
+
+        reward = -0.001
+
+        # Light action regularization to reduce jittering/explosive exploration.
+        reward -= 0.002 * float(np.linalg.norm(self._last_action[:4]))
+
+        # Two-phase shaping:
+        #   1) before grasp, strongly guide tool -> free cable end,
+        #   2) after grasp, optimize routing metrics to the next clip.
+        if not self.grasped:
+            # Global reach signal (works from anywhere in workspace)
+            reward -= 0.6 * reach_dist
+            # Bonus for being within suction range
+            pregrasp_reward = 0.0
+            pregrasp_reward += 0.32 * attach_quality
+            pregrasp_reward -= 0.18 * dist_norm
+            if bool(suction_metrics["suction_attach_eligible"]):
+                pregrasp_reward += 0.10
+            reward += self._pregrasp_reward_scale * pregrasp_reward
+        else:
+            routing_reward = 0.0
+            routing_reward -= 0.75 * target_dist
+            routing_reward -= 0.08 * target_z_dist
+            routing_reward += 0.20 * progress_fraction
+            routing_reward += 0.10 * float(np.clip(1.0 - target_dist / 0.20, 0.0, 1.0))
+            reward += self._route_reward_scale * routing_reward
+
         if self.suction_on:
             reward += 0.01
         if self.grasped:
@@ -1167,6 +1345,7 @@ class URCableRoutingEnv:
             "suction_last_attach_eligible": bool(self._last_attach_eligible),
             "suction_last_attach_prob": float(self._last_attach_prob),
             "suction_last_attach_quality": float(self._last_attach_quality),
+            "curriculum_stage": int(self._curriculum_stage),
         }
         info.update(suction_metrics)
         return float(reward), done, info
@@ -1190,6 +1369,7 @@ class URCableRoutingEnv:
 
         free_to_target = (current_clip_pos - free_pos).astype(np.float32)
         anchor_to_free = (free_pos - self._anchor_pos().astype(np.float32)).astype(np.float32)
+        suction_to_free = (free_pos - suction_pos).astype(np.float32)
 
         obs = np.concatenate(
             [
@@ -1202,6 +1382,7 @@ class URCableRoutingEnv:
                 all_clip_pos,
                 free_to_target,
                 anchor_to_free,
+                suction_to_free,
                 np.array([self.routed_clip_count / self.n_clips], dtype=np.float32),
                 np.array([1.0 if self.suction_on else 0.0], dtype=np.float32),
                 np.array([1.0 if self.grasped else 0.0], dtype=np.float32),
@@ -1250,6 +1431,13 @@ class URCableRoutingEnv:
         return StepResult(self._observe(), reward, done, info)
 
     def _compose_multi_camera_frame(self) -> np.ndarray:
+        if self._renderer_overview is None:
+            rw, rh = self.render_size
+            self._renderer_overview = mujoco.Renderer(self.model, height=rh, width=rw)
+            self._renderer_board = mujoco.Renderer(self.model, height=rh, width=rw)
+            self._renderer_side = mujoco.Renderer(self.model, height=rh, width=rw)
+            self._renderer_ee = mujoco.Renderer(self.model, height=rh, width=rw)
+
         self._renderer_overview.update_scene(self.data, camera=self._camera_overview)
         frame_overview = self._renderer_overview.render()
         self._renderer_board.update_scene(self.data, camera=self._camera_board)

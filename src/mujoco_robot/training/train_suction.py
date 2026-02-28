@@ -22,16 +22,16 @@ from mujoco_robot.tasks import (
 from mujoco_robot.training.callbacks import BestEpisodeVideoCallback
 
 
-DEFAULT_CFG_NAME = "ur3e_suction_contact_dense_stable"
+DEFAULT_CFG_NAME = "ur3e_lift_suction_dense_stable"
 
 
 def train_suction_ppo(
-    total_timesteps: int = 1_000_000,
-    n_envs: int = 16,
+    total_timesteps: int = 30_000_000,
+    n_envs: int = 32,
     log_dir: str = "runs",
     log_name: str = "lift_suction_ppo",
     save_video: bool = True,
-    save_video_every: int = 50_000,
+    save_video_every: int = 1_000_000,
     progress_bar: bool = True,
     sb3_verbose: int = 0,
     callback_new_best_only: bool = True,
@@ -138,10 +138,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Train PPO on lift-suction task.")
     parser.add_argument("--cfg-name", type=str, default=DEFAULT_CFG_NAME)
     parser.add_argument("--list-cfgs", action="store_true")
-    parser.add_argument("--total-timesteps", type=int, default=1_000_000)
-    parser.add_argument("--n-envs", type=int, default=16)
+    parser.add_argument("--total-timesteps", type=int, default=20_000_000)
+    parser.add_argument("--n-envs", type=int, default=32)
     parser.add_argument("--save-video", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--save-video-every", type=int, default=50_000)
+    parser.add_argument("--save-video-every", type=int, default=1_000_000)
     parser.add_argument(
         "--progress-bar",
         action=argparse.BooleanOptionalAction,

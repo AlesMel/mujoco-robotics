@@ -26,7 +26,7 @@ def make_ur3e_lift_suction_cfg() -> LiftSuctionTaskConfig:
     return LiftSuctionTaskConfig(
         model_path=robot.model_path,
         actuator_profile="ur3e",
-        time_limit=300,
+        time_limit=1500,
     )
 
 

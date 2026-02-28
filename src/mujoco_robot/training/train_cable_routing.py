@@ -19,23 +19,27 @@ from mujoco_robot.tasks import (
     list_cable_routing_cfgs,
     make_cable_routing_gymnasium,
 )
-from mujoco_robot.training.callbacks import BestEpisodeVideoCallback
+from mujoco_robot.training.callbacks import (
+    BestEpisodeVideoCallback,
+    CableRoutingCurriculumCallback,
+)
 
 
-DEFAULT_CFG_NAME = "ur3e_cable_routing_dense_stable"
+DEFAULT_CFG_NAME = "ur3e_cable_grasp"
 
 
 def train_cable_routing_ppo(
     total_timesteps: int = 1_500_000,
-    n_envs: int = 16,
+    n_envs: int = 8,
     log_dir: str = "runs",
     log_name: str = "cable_routing_ppo",
     save_video: bool = True,
-    save_video_every: int = 75_000,
+    save_video_every: int = 25_000,
     progress_bar: bool = True,
     sb3_verbose: int = 0,
     callback_new_best_only: bool = True,
     cfg_name: str = DEFAULT_CFG_NAME,
+    use_curriculum: bool = True,
 ):
     """Quick-start PPO training on the cable-routing task."""
 
@@ -46,12 +50,22 @@ def train_cable_routing_ppo(
         return cfg
 
     preview_cfg = build_cfg(seed=0, render_mode=None)
+
+    # Auto-detect task mode from env_kwargs.
+    task_mode = preview_cfg.env_kwargs.get("task_mode", "route")
+    if task_mode == "grasp" and use_curriculum:
+        use_curriculum = False  # curriculum is meaningless for grasp subtask
+
     print(f"\n{'='*50}")
     print("  Cable-routing training config")
     print(f"  Config profile:   {cfg_name}")
+    print(f"  Task mode:        {task_mode}")
     print(f"  Robot profile:    {preview_cfg.actuator_profile}")
     print(f"  Time limit:       {preview_cfg.time_limit}")
     print(f"  Progress bar:     {progress_bar}")
+    print(f"  Curriculum:       {use_curriculum}")
+    print(f"  Save video:       {save_video}")
+    print(f"  Save video every: {save_video_every:,}")
     print(f"  Total timesteps:  {total_timesteps:,}")
     print(f"{'='*50}\n")
 
@@ -63,10 +77,23 @@ def train_cable_routing_ppo(
         return _init
 
     vec_env = SubprocVecEnv([make_env(i) for i in range(n_envs)])
-    vec_env = VecNormalize(vec_env, norm_obs=True, norm_reward=True, clip_obs=10.0)
+    # Disable reward normalization for grasp mode -- the raw distance/velocity
+    # reward is already well-scaled and normalization destroys the gradient.
+    norm_reward = task_mode != "grasp"
+    vec_env = VecNormalize(vec_env, norm_obs=True, norm_reward=norm_reward, clip_obs=10.0)
 
     env_name = f"cable_routing_{preview_cfg.actuator_profile}_{cfg_name}".replace("/", "_")
     callbacks = []
+    if use_curriculum:
+        callbacks.append(
+            CableRoutingCurriculumCallback(
+                total_timesteps=total_timesteps,
+                stage1_frac=0.35,
+                stage2_frac=0.70,
+                verbose=1 if sb3_verbose > 0 else 0,
+            )
+        )
+
     if save_video:
 
         def make_eval_env():
@@ -131,9 +158,9 @@ def main() -> None:
     parser.add_argument("--cfg-name", type=str, default=DEFAULT_CFG_NAME)
     parser.add_argument("--list-cfgs", action="store_true")
     parser.add_argument("--total-timesteps", type=int, default=1_500_000)
-    parser.add_argument("--n-envs", type=int, default=16)
+    parser.add_argument("--n-envs", type=int, default=8)
     parser.add_argument("--save-video", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--save-video-every", type=int, default=75_000)
+    parser.add_argument("--save-video-every", type=int, default=25_000)
     parser.add_argument(
         "--progress-bar",
         action=argparse.BooleanOptionalAction,
@@ -153,6 +180,12 @@ def main() -> None:
         default=True,
         help="If true, callback prints only when eval return reaches a new best.",
     )
+    parser.add_argument(
+        "--use-curriculum",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Use a single-run staged curriculum (easy -> mid -> full).",
+    )
     args = parser.parse_args()
 
     if args.list_cfgs:
@@ -168,6 +201,7 @@ def main() -> None:
         progress_bar=args.progress_bar,
         sb3_verbose=args.sb3_verbose,
         callback_new_best_only=args.callback_new_best_only,
+        use_curriculum=args.use_curriculum,
     )
 
 

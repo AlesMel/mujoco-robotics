@@ -27,6 +27,52 @@ from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 
 
+class CableRoutingCurriculumCallback(BaseCallback):
+    """Single-run curriculum for cable routing (easy -> mid -> full)."""
+
+    def __init__(
+        self,
+        total_timesteps: int,
+        stage1_frac: float = 0.35,
+        stage2_frac: float = 0.70,
+        verbose: int = 1,
+    ):
+        super().__init__(verbose)
+        self.total_timesteps = int(max(1, total_timesteps))
+        self.stage1_frac = float(np.clip(stage1_frac, 0.05, 0.95))
+        self.stage2_frac = float(np.clip(stage2_frac, self.stage1_frac + 0.05, 0.99))
+        self._active_stage = -1
+
+    def _stage_from_progress(self) -> int:
+        progress = float(self.num_timesteps / self.total_timesteps)
+        if progress < self.stage1_frac:
+            return 0
+        if progress < self.stage2_frac:
+            return 1
+        return 2
+
+    def _apply_stage(self, stage: int) -> None:
+        stages = self.training_env.env_method("apply_curriculum_stage", int(stage))
+        self._active_stage = int(stage)
+        self.logger.record("curriculum/stage", float(self._active_stage))
+        if self.verbose:
+            uniq = sorted(set(int(s) for s in stages))
+            print(
+                f"[curriculum] step={self.num_timesteps} "
+                f"progress={self.num_timesteps/self.total_timesteps:.2%} "
+                f"stage={self._active_stage} env_stages={uniq}"
+            )
+
+    def _init_callback(self) -> None:
+        self._apply_stage(self._stage_from_progress())
+
+    def _on_step(self) -> bool:
+        target_stage = self._stage_from_progress()
+        if target_stage != self._active_stage:
+            self._apply_stage(target_stage)
+        return True
+
+
 class BestEpisodeVideoCallback(BaseCallback):
     """Records a video of the best-return eval episode every *N* training episodes.
 
@@ -77,6 +123,24 @@ class BestEpisodeVideoCallback(BaseCallback):
 
     def _init_callback(self) -> None:
         self.video_dir.mkdir(parents=True, exist_ok=True)
+
+    def _write_video(self, path: Path, frames: list[np.ndarray], fps: int) -> None:
+        if not frames:
+            return
+        frame_list = list(frames)
+        if len(frame_list) == 1:
+            frame_list.append(frame_list[0].copy())
+        try:
+            iio.imwrite(
+                path,
+                frame_list,
+                fps=fps,
+                codec="libx264",
+                pixelformat="yuv420p",
+                ffmpeg_log_level="error",
+            )
+        except TypeError:
+            iio.imwrite(path, frame_list, fps=fps)
 
     def _on_step(self) -> bool:
         if self.num_timesteps >= self.next_record:
@@ -153,7 +217,7 @@ class BestEpisodeVideoCallback(BaseCallback):
         ts = int(time.time())
         fname = self.video_dir / f"eval_step_{self.num_timesteps:09d}_{ts}.mp4"
         if frames:
-            iio.imwrite(fname, frames, fps=fps)
+            self._write_video(fname, frames, fps)
             if self.verbose and not self.log_new_best_only:
                 print(f"[video] saved eval episode to {fname} "
                       f"(return {ep_return:.3f}, fps={fps})")
@@ -161,7 +225,7 @@ class BestEpisodeVideoCallback(BaseCallback):
         if ep_return > self.best_return and frames:
             self.best_return = ep_return
             best_fname = self.video_dir / "best_episode_latest.mp4"
-            iio.imwrite(best_fname, frames, fps=fps)
+            self._write_video(best_fname, frames, fps)
             self.logger.record("eval/best_return", float(self.best_return))
             self.logger.record("eval/best_video", str(best_fname))
             if self.verbose:
