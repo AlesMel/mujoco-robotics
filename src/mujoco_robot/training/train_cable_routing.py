@@ -8,6 +8,7 @@ Usage::
 from __future__ import annotations
 
 import argparse
+
 import torch.nn as nn
 
 from stable_baselines3 import PPO
@@ -22,6 +23,7 @@ from mujoco_robot.tasks import (
 from mujoco_robot.training.callbacks import (
     BestEpisodeVideoCallback,
     CableRoutingCurriculumCallback,
+    RunDirCheckpointCallback,
 )
 
 
@@ -83,7 +85,13 @@ def train_cable_routing_ppo(
     vec_env = VecNormalize(vec_env, norm_obs=True, norm_reward=norm_reward, clip_obs=10.0)
 
     env_name = f"cable_routing_{preview_cfg.actuator_profile}_{cfg_name}".replace("/", "_")
-    callbacks = []
+    callbacks = [
+        RunDirCheckpointCallback(
+            env_name=env_name,
+            vec_norm=vec_env,
+            save_every_timesteps=500_000,
+        ),
+    ]
     if use_curriculum:
         callbacks.append(
             CableRoutingCurriculumCallback(
@@ -140,16 +148,11 @@ def train_cable_routing_ppo(
 
     model.learn(
         total_timesteps=total_timesteps,
-        callback=callbacks if callbacks else None,
+        callback=callbacks,
         tb_log_name=log_name,
         progress_bar=progress_bar,
     )
 
-    model_path = f"ppo_{env_name}"
-    model.save(model_path)
-    vec_norm_path = f"{model_path}_vecnorm.pkl"
-    vec_env.save(vec_norm_path)
-    print(f"Model saved to {model_path}.zip")
     return model
 
 

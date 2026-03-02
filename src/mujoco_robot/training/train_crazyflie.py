@@ -19,7 +19,10 @@ from mujoco_robot.tasks import (
     list_crazyflie_cfgs,
     make_crazyflie_hover_gymnasium,
 )
-from mujoco_robot.training.callbacks import BestEpisodeVideoCallback
+from mujoco_robot.training.callbacks import (
+    BestEpisodeVideoCallback,
+    RunDirCheckpointCallback,
+)
 
 
 DEFAULT_CFG_NAME = "crazyflie_hover_dense_stable"
@@ -78,7 +81,13 @@ def train_crazyflie_ppo(
     vec_env = VecNormalize(vec_env, norm_obs=True, norm_reward=True, clip_obs=10.0)
 
     env_name = f"crazyflie_hover_{cfg_name}".replace("/", "_")
-    callbacks = []
+    callbacks = [
+        RunDirCheckpointCallback(
+            env_name=env_name,
+            vec_norm=vec_env,
+            save_every_timesteps=500_000,
+        ),
+    ]
     if save_video:
 
         def make_eval_env():
@@ -125,16 +134,11 @@ def train_crazyflie_ppo(
 
     model.learn(
         total_timesteps=total_timesteps,
-        callback=callbacks if callbacks else None,
+        callback=callbacks,
         tb_log_name=log_name,
         progress_bar=progress_bar,
     )
 
-    model_path = f"ppo_{env_name}"
-    model.save(model_path)
-    vec_norm_path = f"{model_path}_vecnorm.pkl"
-    vec_env.save(vec_norm_path)
-    print(f"Model saved to {model_path}.zip")
     return model
 
 

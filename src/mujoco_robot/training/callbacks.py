@@ -73,6 +73,93 @@ class CableRoutingCurriculumCallback(BaseCallback):
         return True
 
 
+class RunDirCheckpointCallback(BaseCallback):
+    """Save model + VecNormalize stats into the TensorBoard run directory.
+
+    Saves periodic checkpoints every *save_every_timesteps* and a final
+    checkpoint when training finishes.  All files go into the logger's
+    directory (the numbered ``runs/<log_name>_<N>/`` folder that SB3
+    creates automatically).
+
+    File layout inside the run dir::
+
+        ppo_<env_name>.zip              # final model
+        ppo_<env_name>_vecnorm.pkl      # final VecNormalize stats
+        checkpoints/
+            step_0001000000.zip
+            step_0001000000_vecnorm.pkl
+            ...
+
+    Parameters
+    ----------
+    env_name : str
+        Base name used for the saved files (e.g. ``"crazyflie_reach_dense"``).
+    vec_norm : VecNormalize | None
+        Training VecNormalize wrapper whose stats should be saved alongside
+        the model.  Pass ``None`` if you don't use observation normalisation.
+    save_every_timesteps : int
+        Training timesteps between periodic checkpoint saves.
+        Set to ``0`` to disable periodic checkpoints (only save at the end).
+    verbose : int
+        Verbosity level.
+    """
+
+    def __init__(
+        self,
+        env_name: str,
+        vec_norm: VecNormalize | None = None,
+        save_every_timesteps: int = 500_000,
+        verbose: int = 1,
+    ):
+        super().__init__(verbose)
+        self.env_name = env_name
+        self.vec_norm = vec_norm
+        self.save_every_timesteps = max(0, save_every_timesteps)
+        self._next_save: int = 0
+
+    # ------------------------------------------------------------------
+    def _init_callback(self) -> None:
+        self._next_save = self.save_every_timesteps if self.save_every_timesteps > 0 else float("inf")
+
+    # ------------------------------------------------------------------
+    @property
+    def _run_dir(self) -> Path:
+        return Path(self.model.logger.dir)
+
+    def _save(self, tag: str, *, subdir: str | None = None) -> Path:
+        """Persist model + vecnorm and return the directory used."""
+        base = self._run_dir
+        if subdir:
+            base = base / subdir
+            base.mkdir(parents=True, exist_ok=True)
+
+        model_path = base / tag
+        self.model.save(str(model_path))
+
+        if self.vec_norm is not None:
+            norm_path = base / f"{tag}_vecnorm.pkl"
+            self.vec_norm.save(str(norm_path))
+
+        return base
+
+    # ------------------------------------------------------------------
+    def _on_step(self) -> bool:
+        if self.save_every_timesteps > 0 and self.num_timesteps >= self._next_save:
+            tag = f"step_{self.num_timesteps:010d}"
+            out = self._save(tag, subdir="checkpoints")
+            if self.verbose:
+                print(f"[checkpoint] step {self.num_timesteps:,} → {out / tag}.zip")
+            self._next_save += self.save_every_timesteps
+        return True
+
+    def _on_training_end(self) -> None:
+        tag = f"ppo_{self.env_name}"
+        out = self._save(tag)
+        print(f"[checkpoint] Final model  → {out / tag}.zip")
+        if self.vec_norm is not None:
+            print(f"[checkpoint] VecNormalize → {out / tag}_vecnorm.pkl")
+
+
 class BestEpisodeVideoCallback(BaseCallback):
     """Records a video of the best-return eval episode every *N* training episodes.
 

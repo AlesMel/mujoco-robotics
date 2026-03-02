@@ -18,7 +18,10 @@ from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 
 from mujoco_robot.tasks.slot_sorter.slot_sorter_env import SlotSorterGymnasium
-from mujoco_robot.training.callbacks import BestEpisodeVideoCallback
+from mujoco_robot.training.callbacks import (
+    BestEpisodeVideoCallback,
+    RunDirCheckpointCallback,
+)
 
 
 def train_slot_sorter_ppo(
@@ -62,7 +65,13 @@ def train_slot_sorter_ppo(
     vec_env = DummyVecEnv([make_env(i) for i in range(n_envs)])
     vec_env = VecNormalize(vec_env, norm_obs=True, norm_reward=True, clip_obs=10.0)
 
-    callbacks = []
+    callbacks = [
+        RunDirCheckpointCallback(
+            env_name="slot_sorter",
+            vec_norm=vec_env,
+            save_every_timesteps=250_000,
+        ),
+    ]
     if save_video:
         def make_eval_env():
             return Monitor(SlotSorterGymnasium(render=True))
@@ -95,12 +104,10 @@ def train_slot_sorter_ppo(
     )
     model.learn(
         total_timesteps=total_timesteps,
-        callback=callbacks if callbacks else None,
+        callback=callbacks,
         tb_log_name=log_name,
     )
-    model.save("ppo_slot_sorter")
-    vec_env.save("ppo_slot_sorter_vecnorm.pkl")
-    print("Model saved to ppo_slot_sorter.zip")
+
     return model
 
 
