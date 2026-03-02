@@ -3,7 +3,7 @@
 
 Renders the 4-camera composite view in an **OpenCV window** with reliable
 keyboard input.  The trained PPO policy runs in real-time while the user
-moves the green goal marker with the keyboard.
+moves the green goal marker with the keyboard or mouse.
 
 Controls  (click the OpenCV window first to give it focus!)
 --------
@@ -18,6 +18,9 @@ Controls  (click the OpenCV window first to give it focus!)
     T            : toggle auto-orbit (goal circles automatically)
     F            : snap goal to drone position
     R            : random new goal
+    M            : toggle mouse-follow mode (goal tracks cursor over top-down view)
+    Left-click   : place goal at clicked position (top-down view)
+    Scroll wheel : adjust goal height (Z) in mouse mode
     +  /  =      : increase goal speed
     −            : decrease goal speed
     Escape       : quit
@@ -74,6 +77,104 @@ _K_RIGHT2 = 0x00530000
 
 def _is_key(code: int, *targets: int) -> bool:
     return code in targets
+
+
+# ──────────────────────────────────────────────────────────
+# Mouse ↔ world projection for the top-down (cf_top) camera
+# ──────────────────────────────────────────────────────────
+def _pixel_to_world_xy(
+    px: int,
+    py: int,
+    model: "mujoco.MjModel",
+    data: "mujoco.MjData",
+    cam_name: str,
+    render_w: int,
+    render_h: int,
+    target_z: float,
+) -> tuple[float, float] | None:
+    """Project a pixel in a single camera tile to world XY at *target_z*.
+
+    Uses the camera intrinsics / extrinsics from the *live* MjData so that
+    trackcom cameras work correctly.
+
+    Returns ``(world_x, world_y)`` or ``None`` when the ray is nearly
+    parallel to the target plane.
+    """
+    cam_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, cam_name)
+    if cam_id < 0:
+        return None
+
+    cam_pos = data.cam_xpos[cam_id].copy()
+    cam_mat = data.cam_xmat[cam_id].reshape(3, 3)
+    fovy = math.radians(float(model.cam_fovy[cam_id]))
+    aspect = render_w / render_h
+
+    half_h = math.tan(fovy / 2.0)
+    half_w = half_h * aspect
+
+    # Normalised device coords – image (0,0) is top-left
+    ndc_x = 2.0 * px / render_w - 1.0
+    ndc_y = 1.0 - 2.0 * py / render_h
+
+    dir_cam = np.array([ndc_x * half_w, ndc_y * half_h, -1.0])
+    dir_cam /= np.linalg.norm(dir_cam)
+    dir_world = cam_mat @ dir_cam
+
+    # Intersect with horizontal plane z = target_z
+    if abs(dir_world[2]) < 1e-8:
+        return None
+    t = (target_z - cam_pos[2]) / dir_world[2]
+    if t < 0:
+        return None
+    hit = cam_pos + t * dir_world
+    return float(hit[0]), float(hit[1])
+
+
+class _MouseState:
+    """Shared mutable state written by the OpenCV mouse callback."""
+
+    def __init__(self) -> None:
+        self.follow_mode: bool = False   # M toggles continuous tracking
+        self.last_px: int = -1           # pixel x inside the cf_top tile
+        self.last_py: int = -1           # pixel y inside the cf_top tile
+        self.click_pending: bool = False # set True on left-click
+        self.scroll_delta: int = 0       # accumulated scroll ticks
+        self.inside_top: bool = False    # cursor is over the top-down panel
+
+
+def _make_mouse_callback(
+    mouse: _MouseState,
+    tile_w: int,
+    tile_h: int,
+    display_scale: float,
+):
+    """Return an OpenCV mouse callback that populates *mouse*.
+
+    The top-down camera occupies the **top-right** tile of the 2×2 composite.
+    """
+    # In the displayed (possibly scaled) image:
+    x_min = int(tile_w * display_scale)
+    x_max = int(2 * tile_w * display_scale)
+    y_min = 0
+    y_max = int(tile_h * display_scale)
+
+    def _cb(event: int, x: int, y: int, flags: int, param) -> None:
+        if x_min <= x < x_max and y_min <= y < y_max:
+            mouse.inside_top = True
+            # Map back to the tile's own pixel coords (un-scaled)
+            mouse.last_px = int((x - x_min) / display_scale)
+            mouse.last_py = int((y - y_min) / display_scale)
+
+            if event == cv2.EVENT_LBUTTONDOWN:
+                mouse.click_pending = True
+
+            if event == cv2.EVENT_MOUSEWHEEL:
+                # flags encodes scroll direction
+                mouse.scroll_delta += 1 if flags > 0 else -1
+        else:
+            mouse.inside_top = False
+
+    return _cb
 
 
 # ──────────────────────────────────────────────────────────
@@ -165,7 +266,8 @@ def _draw_hud(
     overlay2 = frame.copy()
     cv2.rectangle(overlay2, (0, h - hint_h), (w, h), (20, 20, 20), -1)
     cv2.addWeighted(overlay2, 0.65, frame, 0.35, 0, frame)
-    hint = "WASD/Arrows:move  Q/E:up/dn  Space:reset  T:orbit  F:snap  R:random  P:pause  +/-:speed  Esc:quit"
+    mouse_tag = "  [MOUSE]" if info.get("_mouse_follow") else ""
+    hint = "WASD:move  Q/E:up/dn  M:mouse  Click:place  Scroll:Z  T:orbit  F:snap  R:random  P:pause  Esc:quit" + mouse_tag
     cv2.putText(frame, hint, (10, h - 6), font, 0.36, (180, 180, 180), 1, cv2.LINE_AA)
 
     return frame
@@ -276,6 +378,9 @@ def main() -> None:
     print("  T              : toggle auto-orbit")
     print("  F              : snap goal to drone position")
     print("  R              : random new goal")
+    print("  M              : toggle mouse-follow mode")
+    print("  Left-click     : place goal (top-down view)")
+    print("  Scroll wheel   : adjust goal Z in mouse mode")
     print("  Escape         : quit")
     print()
     print("  >>> Click the OpenCV window to give it keyboard focus <<<")
@@ -291,6 +396,14 @@ def main() -> None:
     disp_w = int(fw * args.window_scale)
     disp_h = int(fh * args.window_scale)
     cv2.resizeWindow(_WINDOW_NAME, disp_w, disp_h)
+
+    # ---- Mouse interaction ----
+    tile_w, tile_h = base.render_size   # single camera tile size
+    mouse = _MouseState()
+    cv2.setMouseCallback(
+        _WINDOW_NAME,
+        _make_mouse_callback(mouse, tile_w, tile_h, args.window_scale),
+    )
 
     running = True
     last_tick = time.perf_counter()
@@ -344,6 +457,10 @@ def main() -> None:
                   f"[{base._goal_pos[0]:+.2f},{base._goal_pos[1]:+.2f},"
                   f"{base._goal_pos[2]:+.2f}]")
 
+        elif _is_key(key, ord("m"), ord("M")):
+            mouse.follow_mode = not mouse.follow_mode
+            print(f"[eval] Mouse-follow: {'ON – hover over top-down view' if mouse.follow_mode else 'OFF'}")
+
         elif _is_key(key, _K_PLUS, _K_EQUAL):
             goal_speed = min(goal_speed + 0.1, 2.0)
             print(f"[eval] Goal speed: {goal_speed:.1f} m/s")
@@ -375,6 +492,36 @@ def main() -> None:
             base._goal_pos[1] = float(np.clip(base._goal_pos[1], -xy_lim, xy_lim))
             base._goal_pos[2] = float(np.clip(base._goal_pos[2], z_lo, z_hi))
             base._update_goal_marker()
+
+        # --- Mouse goal control ---
+        _z_step = 0.03  # metres per scroll tick
+        if mouse.scroll_delta != 0:
+            base._goal_pos[2] += mouse.scroll_delta * _z_step
+            base._goal_pos[2] = float(np.clip(base._goal_pos[2], z_lo, z_hi))
+            mouse.scroll_delta = 0
+            base._update_goal_marker()
+
+        if mouse.click_pending or (mouse.follow_mode and mouse.inside_top):
+            result = _pixel_to_world_xy(
+                mouse.last_px, mouse.last_py,
+                base.model, base.data,
+                cam_name="cf_top",
+                render_w=tile_w, render_h=tile_h,
+                target_z=float(base._goal_pos[2]),
+            )
+            if result is not None:
+                gx, gy = result
+                gx = float(np.clip(gx, -xy_lim, xy_lim))
+                gy = float(np.clip(gy, -xy_lim, xy_lim))
+                base._goal_pos[0] = gx
+                base._goal_pos[1] = gy
+                base._update_goal_marker()
+                base._reach_hold_counter = 0
+                if mouse.click_pending:
+                    auto_orbit = False
+                    print(f"[eval] Mouse-placed goal: "
+                          f"[{gx:+.2f},{gy:+.2f},{base._goal_pos[2]:+.2f}]")
+            mouse.click_pending = False
 
         # --- Auto-orbit ---
         if auto_orbit:
@@ -431,6 +578,8 @@ def main() -> None:
 
         # ── Render & display ──
         frame = base.render(mode="rgb_array")
+        hud_info = dict(last_info)
+        hud_info["_mouse_follow"] = mouse.follow_mode
         frame = _draw_hud(
             frame,
             goal=base._goal_pos,
@@ -440,7 +589,7 @@ def main() -> None:
             paused=paused,
             auto_orbit=auto_orbit,
             ep_done=ep_done,
-            info=last_info,
+            info=hud_info,
         )
         # OpenCV uses BGR
         frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)

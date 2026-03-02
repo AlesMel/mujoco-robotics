@@ -115,12 +115,8 @@
     </body>
   </worldbody>
 
-  <actuator>
-    <velocity name="m1_vel" joint="m1_joint" kv="0.0015" ctrlrange="0 2600" forcerange="-0.03 0.03" />
-    <velocity name="m2_vel" joint="m2_joint" kv="0.0015" ctrlrange="0 2600" forcerange="-0.03 0.03" />
-    <velocity name="m3_vel" joint="m3_joint" kv="0.0015" ctrlrange="0 2600" forcerange="-0.03 0.03" />
-    <velocity name="m4_vel" joint="m4_joint" kv="0.0015" ctrlrange="0 2600" forcerange="-0.03 0.03" />
-  </actuator>
+  <!-- Rotor joints are free-spinning; thrust/torque is applied analytically
+       via xfrc_applied to avoid double-counting actuator reaction forces. -->
 
   <sensor>
     <gyro name="imu_gyro" site="imu_site" />

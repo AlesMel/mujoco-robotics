@@ -106,8 +106,15 @@ def test_motor_lag_prevents_instant_max_speed() -> None:
 def test_ground_effect_monotonicity() -> None:
     """Ground-effect multiplier should be larger near the ground."""
     env = CrazyflieHoverEnv(time_limit=2, seed=0)
-    low = env._ground_effect_multiplier(0.01)
-    high = env._ground_effect_multiplier(0.30)
+    # cos_tilt=1.0 (upright), horiz_speed=0.0 (no lateral motion)
+    low = env._ground_effect_multiplier(0.01, cos_tilt=1.0, horiz_speed=0.0)
+    high = env._ground_effect_multiplier(0.30, cos_tilt=1.0, horiz_speed=0.0)
     assert low > high
     assert high >= 1.0
+    # Tilted drone should get less ground effect
+    low_tilted = env._ground_effect_multiplier(0.01, cos_tilt=0.5, horiz_speed=0.0)
+    assert low_tilted < low
+    # Moving laterally should reduce ground effect
+    low_moving = env._ground_effect_multiplier(0.01, cos_tilt=1.0, horiz_speed=1.0)
+    assert low_moving < low
     env.close()

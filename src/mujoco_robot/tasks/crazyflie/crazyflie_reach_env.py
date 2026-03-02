@@ -164,8 +164,10 @@ class CrazyflieReachEnv:
         disturbance_theta: float = 1.5,
         disturbance_sigma: float = 0.03,
         disturbance_max: float = 0.12,
+        disturbance_torque_fraction: float = 0.0,
         battery_capacity_mah: float = 250.0,
         battery_nominal_voltage: float = 3.7,
+        use_mixer: bool = False,
         # ---------- reach-specific params ----------
         goal_xy_range: float = 0.55,
         goal_z_range: Tuple[float, float] = (0.20, 0.65),
@@ -209,11 +211,15 @@ class CrazyflieReachEnv:
         self.disturbance_theta = float(max(0.0, disturbance_theta))
         self.disturbance_sigma = float(max(0.0, disturbance_sigma))
         self.disturbance_max = float(max(0.0, disturbance_max))
+        self.disturbance_torque_fraction = float(max(0.0, disturbance_torque_fraction))
         self.battery_capacity_mah = float(max(1e-6, battery_capacity_mah))
         self.battery_nominal_voltage = float(max(1e-6, battery_nominal_voltage))
         self.battery_energy_j = (
             self.battery_capacity_mah / 1000.0 * self.battery_nominal_voltage * 3600.0
         )
+
+        # Optional collective/attitude mixer (False = direct per-motor control)
+        self.use_mixer = bool(use_mixer)
 
         # Reach-specific
         self.goal_xy_range = float(max(0.01, goal_xy_range))
@@ -264,16 +270,16 @@ class CrazyflieReachEnv:
             mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, f"m{i}_joint")
             for i in range(1, 5)
         ]
-        self.motor_actuator_ids = [
-            mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_ACTUATOR, f"m{i}_vel")
-            for i in range(1, 5)
+        # DOF addresses for direct qvel writes (no MuJoCo actuators needed)
+        self._rotor_dof_adrs = [
+            int(self.model.jnt_dofadr[jid]) for jid in self.motor_joint_ids
         ]
         self.motor_site_ids = [
             mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_SITE, f"m{i}_site")
             for i in range(1, 5)
         ]
-        if any(mid < 0 for mid in self.motor_actuator_ids):
-            raise ValueError("Model must define actuators m1_vel..m4_vel.")
+        if any(jid < 0 for jid in self.motor_joint_ids):
+            raise ValueError("Model must define joints m1_joint..m4_joint.")
         if any(mid < 0 for mid in self.motor_site_ids):
             raise ValueError("Model must define sites m1_site..m4_site.")
 
@@ -312,6 +318,7 @@ class CrazyflieReachEnv:
 
         self.battery_soc = 1.0
         self._disturbance_force_world = np.zeros(3, dtype=float)
+        self._disturbance_torque_body = np.zeros(3, dtype=float)
 
         self._last_reward = 0.0
         self._last_ground_effect_mean = 1.0
@@ -434,30 +441,61 @@ class CrazyflieReachEnv:
         if self._goal_mocap_id >= 0:
             self.data.mocap_pos[self._goal_mocap_id] = self._goal_pos
 
-    def _ground_effect_multiplier(self, rotor_height: float) -> float:
+    def _ground_effect_multiplier(
+        self, rotor_height: float, cos_tilt: float, horiz_speed: float,
+    ) -> float:
+        """Height-dependent ground-effect with tilt & lateral-velocity attenuation."""
         if rotor_height >= self.ground_effect_height:
             return 1.0
         ratio = 1.0 - (rotor_height / self.ground_effect_height)
-        return float(np.clip(1.0 + self.ground_effect_gain * ratio * ratio, 1.0, 1.25))
+        base_mult = self.ground_effect_gain * ratio * ratio
 
-    def _update_disturbance_force(self) -> None:
+        # Tilt attenuation: full effect only when body Z is vertical
+        tilt_factor = max(cos_tilt, 0.0) ** 2
+
+        # Lateral-velocity attenuation (exponential decay, ~0.5 m/s half-life)
+        speed_factor = math.exp(-1.4 * horiz_speed)
+
+        mult = 1.0 + base_mult * tilt_factor * speed_factor
+        return float(np.clip(mult, 1.0, 1.25))
+
+    def _update_disturbance(self) -> None:
+        """Advance Ornstein-Uhlenbeck processes for wind force *and* torque."""
         if self.disturbance_sigma <= 0.0:
             self._disturbance_force_world[:] = 0.0
+            self._disturbance_torque_body[:] = 0.0
             return
         dt = self.dt_control
-        noise = self._rng.normal(0.0, 1.0, size=3)
+        sqrt_dt = math.sqrt(dt)
+
+        # --- Force (world frame) ---
+        noise_f = self._rng.normal(0.0, 1.0, size=3)
         self._disturbance_force_world += (
             self.disturbance_theta * (-self._disturbance_force_world) * dt
-            + self.disturbance_sigma * math.sqrt(dt) * noise
+            + self.disturbance_sigma * sqrt_dt * noise_f
         )
         nrm = float(np.linalg.norm(self._disturbance_force_world))
         if nrm > self.disturbance_max and nrm > 1e-9:
             self._disturbance_force_world *= self.disturbance_max / nrm
 
+        # --- Torque (body frame) ---
+        torque_sigma = self.disturbance_sigma * self.disturbance_torque_fraction
+        torque_max = self.disturbance_max * self.disturbance_torque_fraction
+        noise_t = self._rng.normal(0.0, 1.0, size=3)
+        self._disturbance_torque_body += (
+            self.disturbance_theta * (-self._disturbance_torque_body) * dt
+            + torque_sigma * sqrt_dt * noise_t
+        )
+        nrm_t = float(np.linalg.norm(self._disturbance_torque_body))
+        if nrm_t > torque_max and nrm_t > 1e-9:
+            self._disturbance_torque_body *= torque_max / nrm_t
+
     def _compute_external_wrenches(self) -> tuple[np.ndarray, np.ndarray, float]:
         _pos, _quat, lin_vel_world, ang_vel_world, rot_mat = self._body_state()
 
         body_z_world = rot_mat[:, 2]
+        cos_tilt = float(body_z_world[2])
+        horiz_speed = float(np.linalg.norm(lin_vel_world[:2]))
         lin_vel_body = rot_mat.T @ lin_vel_world
         ang_vel_body = rot_mat.T @ ang_vel_world
 
@@ -467,7 +505,7 @@ class CrazyflieReachEnv:
 
         for i in range(4):
             rotor_height = float(self.data.site_xpos[self.motor_site_ids[i]][2])
-            ge_mult = self._ground_effect_multiplier(rotor_height)
+            ge_mult = self._ground_effect_multiplier(rotor_height, cos_tilt, horiz_speed)
             ground_mults[i] = ge_mult
             thrust = self.thrust_coeff * (self.motor_omega[i] ** 2) * ge_mult
 
@@ -486,13 +524,33 @@ class CrazyflieReachEnv:
         total_force_world += rot_mat @ drag_force_body
         total_force_world += self._disturbance_force_world
         total_torque_body += drag_torque_body
+        total_torque_body += self._disturbance_torque_body
 
         total_torque_world = rot_mat @ total_torque_body
         ground_effect_mean = float(np.mean(ground_mults))
         return total_force_world, total_torque_world, ground_effect_mean
 
+    # --- Mixer matrix (collective + roll/pitch/yaw → per-motor) ---
+    _MIXER = np.array(
+        [
+            [1.0,  1.0,  1.0,  1.0],   # collective
+            [1.0, -1.0, -1.0,  1.0],   # roll
+            [1.0,  1.0, -1.0, -1.0],   # pitch
+            [1.0, -1.0,  1.0, -1.0],   # yaw
+        ],
+        dtype=float,
+    ).T  # shape (4 motors, 4 channels)
+
     def _apply_motor_and_battery_dynamics(self, action: np.ndarray) -> None:
-        cmd_norm = np.clip((action + 1.0) * 0.5, 0.0, 1.0)
+        # --- Action mapping ---
+        if self.use_mixer:
+            collective = (action[0] + 1.0) * 0.5
+            att = action[1:4] * 0.5
+            mixed = np.array([collective, att[0], att[1], att[2]], dtype=float)
+            cmd_norm = np.clip(self._MIXER @ mixed, 0.0, 1.0)
+        else:
+            cmd_norm = np.clip((action + 1.0) * 0.5, 0.0, 1.0)
+
         if self.actuator_noise_std > 0.0:
             cmd_norm = cmd_norm + self._rng.normal(0.0, self.actuator_noise_std, size=4)
         cmd_norm = np.clip(cmd_norm, 0.0, 1.0)
@@ -504,12 +562,11 @@ class CrazyflieReachEnv:
         self.motor_omega += alpha * (omega_des - self.motor_omega)
         self.motor_omega = np.clip(self.motor_omega, 0.0, self.max_motor_omega * voltage_scale)
 
-        for i, aid in enumerate(self.motor_actuator_ids):
-            self.data.ctrl[aid] = self.motor_omega[i]
-
         self._last_motor_cmd_norm = cmd_norm
 
-        power = 1.2 + 6.0 * float(np.mean((self.motor_omega / self.max_motor_omega) ** 3))
+        # --- Thrust-based battery drain (calibrated to real CF2.1) ---
+        omega_frac = self.motor_omega / self.max_motor_omega
+        power = 0.5 + float(np.sum(2.0 * omega_frac ** 2 + 1.0 * omega_frac ** 3))
         self.battery_soc -= (power * self.dt_control) / self.battery_energy_j
         self.battery_soc = float(np.clip(self.battery_soc, 0.0, 1.0))
 
@@ -548,11 +605,12 @@ class CrazyflieReachEnv:
         hover_omega = float(np.sqrt(total_mass * 9.81 / (4.0 * self.thrust_coeff)))
         self.motor_omega[:] = hover_omega * (1.0 + self._rng.normal(0.0, 0.02, size=4))
         self.motor_omega[:] = np.clip(self.motor_omega, 0.0, self.max_motor_omega)
-        for i, aid in enumerate(self.motor_actuator_ids):
-            self.data.ctrl[aid] = self.motor_omega[i]
+        for i, dof in enumerate(self._rotor_dof_adrs):
+            self.data.qvel[dof] = self.motor_omega[i]
 
         self.battery_soc = float(self._rng.uniform(0.95, 1.0))
         self._disturbance_force_world[:] = 0.0
+        self._disturbance_torque_body[:] = 0.0
         self._last_ground_effect_mean = 1.0
         self._last_reward = 0.0
         self._last_info = {}
@@ -766,7 +824,7 @@ class CrazyflieReachEnv:
         self._prev_action = self._last_action.copy()
         self._last_action = act.astype(np.float32)
 
-        self._update_disturbance_force()
+        self._update_disturbance()
         self._apply_motor_and_battery_dynamics(act)
 
         for _ in range(self.n_substeps):
@@ -775,6 +833,9 @@ class CrazyflieReachEnv:
 
             self.data.xfrc_applied[self.cf_body_id, :3] = force_world
             self.data.xfrc_applied[self.cf_body_id, 3:] = torque_world
+            # Pin rotor qvel each substep to prevent gyroscopic drift
+            for i, dof in enumerate(self._rotor_dof_adrs):
+                self.data.qvel[dof] = self.motor_omega[i]
             mujoco.mj_step(self.model, self.data)
             self.data.xfrc_applied[self.cf_body_id, :] = 0.0
 

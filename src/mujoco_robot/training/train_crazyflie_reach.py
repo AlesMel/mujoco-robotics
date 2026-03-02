@@ -115,7 +115,7 @@ def train_crazyflie_reach_ppo(
         max_grad_norm=1.0,
         device="cuda",
         policy_kwargs=dict(
-            net_arch=dict(pi=[256, 256], vf=[256, 256]),
+            net_arch=dict(pi=[128, 128], vf=[128, 128]),
             activation_fn=nn.Tanh,
         ),
         verbose=sb3_verbose,
