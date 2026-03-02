@@ -119,3 +119,21 @@ gymnasium.register(
     ),
     max_episode_steps=450,
 )
+
+gymnasium.register(
+    id="MuJoCoRobot/Crazyflie-Hover-v0",
+    entry_point=(
+        "mujoco_robot.tasks.crazyflie.crazyflie_env:"
+        "CrazyflieHoverGymnasium"
+    ),
+    max_episode_steps=700,
+)
+
+gymnasium.register(
+    id="MuJoCoRobot/Crazyflie-Reach-v0",
+    entry_point=(
+        "mujoco_robot.tasks.crazyflie.crazyflie_reach_env:"
+        "CrazyflieReachGymnasium"
+    ),
+    max_episode_steps=800,
+)

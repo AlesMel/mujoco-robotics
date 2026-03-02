@@ -27,6 +27,15 @@ from mujoco_robot.tasks.cable_routing import (
     make_cable_routing_env,
     make_cable_routing_gymnasium,
 )
+from mujoco_robot.tasks.crazyflie import (
+    CrazyflieTaskConfig,
+    get_crazyflie_cfg,
+    list_crazyflie_cfgs,
+    make_crazyflie_hover_env,
+    make_crazyflie_hover_gymnasium,
+    make_crazyflie_reach_env,
+    make_crazyflie_reach_gymnasium,
+)
 from mujoco_robot.tasks.registry import (
     TaskSpec,
     TASK_REGISTRY,
@@ -68,6 +77,13 @@ __all__ = [
     "list_cable_routing_cfgs",
     "make_cable_routing_env",
     "make_cable_routing_gymnasium",
+    "CrazyflieTaskConfig",
+    "get_crazyflie_cfg",
+    "list_crazyflie_cfgs",
+    "make_crazyflie_hover_env",
+    "make_crazyflie_hover_gymnasium",
+    "make_crazyflie_reach_env",
+    "make_crazyflie_reach_gymnasium",
     "TaskSpec",
     "TASK_REGISTRY",
     "get_task_spec",

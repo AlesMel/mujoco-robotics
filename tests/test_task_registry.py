@@ -51,6 +51,7 @@ def test_task_registry_lists_builtin_tasks() -> None:
     assert "lift_suction" in names
     assert "suction_contact" in names
     assert "cable_routing" in names
+    assert "crazyflie_hover" in names
 
 
 def test_get_task_spec_unknown_raises() -> None:

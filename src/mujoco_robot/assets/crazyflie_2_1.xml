@@ -1,0 +1,137 @@
+<mujoco model="crazyflie_2_1">
+  <compiler angle="radian" coordinate="local" />
+
+  <option timestep="0.001" gravity="0 0 -9.81" integrator="implicitfast" />
+
+  <visual>
+    <global offwidth="1280" offheight="720" />
+    <headlight ambient="0.35 0.35 0.35" diffuse="0.55 0.55 0.55" specular="0.1 0.1 0.1" />
+  </visual>
+
+  <asset>
+    <texture name="sky" type="skybox" builtin="gradient" rgb1="0.88 0.94 1.0" rgb2="0.68 0.78 0.9" width="256" height="256" />
+    <material name="floor_mat" rgba="0.16 0.17 0.18 1" />
+    <material name="body_mat" rgba="0.09 0.09 0.1 1" />
+    <material name="prop_mat" rgba="0.22 0.22 0.24 0.7" />
+    <material name="battery_mat" rgba="0.78 0.16 0.12 1" />
+    <material name="arena_mat" rgba="0.12 0.18 0.24 0.22" />
+  </asset>
+
+  <default>
+    <default class="cf_col">
+      <geom contype="1" conaffinity="1" friction="0.9 0.05 0.02" solref="0.005 1" solimp="0.9 0.95 0.001" />
+    </default>
+    <default class="cf_viz">
+      <geom contype="0" conaffinity="0" mass="0" />
+    </default>
+    <default class="rotor_joint">
+      <joint type="hinge" axis="0 0 1" damping="0" armature="2e-7" limited="false" />
+    </default>
+  </default>
+
+  <worldbody>
+    <geom name="floor" type="plane" size="3 3 0.1" material="floor_mat" />
+
+    <geom name="arena_north" type="box" pos="0 1.05 0.20" size="1.05 0.02 0.20" material="arena_mat" contype="0" conaffinity="0" />
+    <geom name="arena_south" type="box" pos="0 -1.05 0.20" size="1.05 0.02 0.20" material="arena_mat" contype="0" conaffinity="0" />
+    <geom name="arena_east" type="box" pos="1.05 0 0.20" size="0.02 1.05 0.20" material="arena_mat" contype="0" conaffinity="0" />
+    <geom name="arena_west" type="box" pos="-1.05 0 0.20" size="0.02 1.05 0.20" material="arena_mat" contype="0" conaffinity="0" />
+
+    <camera
+      name="cf_chase"
+      mode="trackcom"
+      pos="0 -0.45 0.18"
+      xyaxes="1 0 0 0 0.55 0.84"
+      fovy="55"
+    />
+    <camera
+      name="cf_top"
+      mode="trackcom"
+      pos="0 0 1.2"
+      xyaxes="1 0 0 0 1 0"
+      fovy="60"
+    />
+    <camera
+      name="cf_side"
+      mode="trackcom"
+      pos="0.55 0 0.25"
+      xyaxes="0 1 0 0 0 1"
+      fovy="50"
+    />
+    <camera
+      name="cf_closeup"
+      mode="trackcom"
+      pos="-0.12 -0.18 0.06"
+      xyaxes="1 -0.3 0 0.1 0.3 0.95"
+      fovy="40"
+    />
+
+    <body name="cf2" pos="0 0 0.28">
+      <freejoint name="cf2_free" />
+      <inertial mass="0.021" pos="0 0 0" diaginertia="1.66e-5 1.66e-5 2.9e-5" />
+
+      <geom name="cf2_deck" class="cf_col" type="box" size="0.016 0.016 0.003" material="body_mat" />
+      <geom name="cf2_arm_x" class="cf_col" type="capsule" fromto="-0.03253 0 0 0.03253 0 0" size="0.0017" material="body_mat" />
+      <geom name="cf2_arm_y" class="cf_col" type="capsule" fromto="0 -0.03253 0 0 0.03253 0" size="0.0017" material="body_mat" />
+
+      <body name="cf2_battery" pos="0 0 -0.0068">
+        <inertial mass="0.006" pos="0 0 0" diaginertia="2.5e-6 2.5e-6 3.2e-6" />
+        <geom name="cf2_battery_geom" class="cf_col" type="box" size="0.012 0.008 0.0032" material="battery_mat" />
+      </body>
+
+      <site name="imu_site" pos="0 0 0" size="0.002" rgba="0.2 0.9 0.9 0.9" />
+      <site name="m1_site" pos="0.03253 0.03253 0" size="0.001" rgba="0.9 0.1 0.1 0.6" />
+      <site name="m2_site" pos="-0.03253 0.03253 0" size="0.001" rgba="0.1 0.9 0.1 0.6" />
+      <site name="m3_site" pos="-0.03253 -0.03253 0" size="0.001" rgba="0.1 0.1 0.9 0.6" />
+      <site name="m4_site" pos="0.03253 -0.03253 0" size="0.001" rgba="0.9 0.9 0.1 0.6" />
+
+      <body name="m1_rotor" pos="0.03253 0.03253 0.0032">
+        <joint name="m1_joint" class="rotor_joint" />
+        <inertial mass="1e-5" pos="0 0 0" diaginertia="1e-8 1e-8 2e-8" />
+        <geom name="m1_pod" class="cf_col" type="cylinder" size="0.0046 0.0022" material="body_mat" />
+        <geom name="m1_prop" class="cf_viz" type="cylinder" size="0.023 0.0006" material="prop_mat" />
+      </body>
+
+      <body name="m2_rotor" pos="-0.03253 0.03253 0.0032">
+        <joint name="m2_joint" class="rotor_joint" />
+        <inertial mass="1e-5" pos="0 0 0" diaginertia="1e-8 1e-8 2e-8" />
+        <geom name="m2_pod" class="cf_col" type="cylinder" size="0.0046 0.0022" material="body_mat" />
+        <geom name="m2_prop" class="cf_viz" type="cylinder" size="0.023 0.0006" material="prop_mat" />
+      </body>
+
+      <body name="m3_rotor" pos="-0.03253 -0.03253 0.0032">
+        <joint name="m3_joint" class="rotor_joint" />
+        <inertial mass="1e-5" pos="0 0 0" diaginertia="1e-8 1e-8 2e-8" />
+        <geom name="m3_pod" class="cf_col" type="cylinder" size="0.0046 0.0022" material="body_mat" />
+        <geom name="m3_prop" class="cf_viz" type="cylinder" size="0.023 0.0006" material="prop_mat" />
+      </body>
+
+      <body name="m4_rotor" pos="0.03253 -0.03253 0.0032">
+        <joint name="m4_joint" class="rotor_joint" />
+        <inertial mass="1e-5" pos="0 0 0" diaginertia="1e-8 1e-8 2e-8" />
+        <geom name="m4_pod" class="cf_col" type="cylinder" size="0.0046 0.0022" material="body_mat" />
+        <geom name="m4_prop" class="cf_viz" type="cylinder" size="0.023 0.0006" material="prop_mat" />
+      </body>
+    </body>
+  </worldbody>
+
+  <actuator>
+    <velocity name="m1_vel" joint="m1_joint" kv="0.0015" ctrlrange="0 2600" forcerange="-0.03 0.03" />
+    <velocity name="m2_vel" joint="m2_joint" kv="0.0015" ctrlrange="0 2600" forcerange="-0.03 0.03" />
+    <velocity name="m3_vel" joint="m3_joint" kv="0.0015" ctrlrange="0 2600" forcerange="-0.03 0.03" />
+    <velocity name="m4_vel" joint="m4_joint" kv="0.0015" ctrlrange="0 2600" forcerange="-0.03 0.03" />
+  </actuator>
+
+  <sensor>
+    <gyro name="imu_gyro" site="imu_site" />
+    <accelerometer name="imu_accel" site="imu_site" />
+    <framepos name="cf_pos" objtype="body" objname="cf2" />
+    <framelinvel name="cf_linvel" objtype="body" objname="cf2" />
+    <frameangvel name="cf_angvel" objtype="body" objname="cf2" />
+    <framequat name="cf_quat" objtype="body" objname="cf2" />
+    <jointvel name="m1_speed" joint="m1_joint" />
+    <jointvel name="m2_speed" joint="m2_joint" />
+    <jointvel name="m3_speed" joint="m3_joint" />
+    <jointvel name="m4_speed" joint="m4_joint" />
+  </sensor>
+</mujoco>

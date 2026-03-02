@@ -18,20 +18,26 @@ def main():
     p = argparse.ArgumentParser(description="Train PPO on UR robot tasks.")
     p.add_argument(
         "--task", type=str, default="reach",
-        choices=["reach", "slot_sorter", "cable_routing"],
+        choices=["reach", "slot_sorter", "cable_routing", "crazyflie_hover"],
         help="Which task to train (default: reach).",
     )
     p.add_argument(
         "--cfg-name",
         type=str,
         default="ur3e_joint_pos_dense_stable",
-        help="Config profile name (used by reach/cable_routing tasks).",
+        help="Config profile name (used by reach/cable_routing/crazyflie_hover).",
     )
     p.add_argument("--total-timesteps", type=int, default=500_000)
     p.add_argument("--n-envs", type=int, default=8)
     p.add_argument("--save-video", action=argparse.BooleanOptionalAction, default=True)
     p.add_argument("--save-video-every", type=int, default=10_000)
     p.add_argument("--learning-rate", type=float, default=3e-4)
+    p.add_argument(
+        "--realtime-render",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Crazyflie only: render training in real time (forces n_envs=1).",
+    )
     args = p.parse_args()
 
     if args.task == "reach":
@@ -60,6 +66,16 @@ def main():
             n_envs=args.n_envs,
             save_video=args.save_video,
             save_video_every=args.save_video_every,
+        )
+    elif args.task == "crazyflie_hover":
+        from mujoco_robot.training.train_crazyflie import train_crazyflie_ppo
+        train_crazyflie_ppo(
+            cfg_name=args.cfg_name,
+            total_timesteps=args.total_timesteps,
+            n_envs=args.n_envs,
+            save_video=args.save_video,
+            save_video_every=args.save_video_every,
+            realtime_render=args.realtime_render,
         )
 
 

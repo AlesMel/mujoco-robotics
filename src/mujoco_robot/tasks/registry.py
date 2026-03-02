@@ -26,6 +26,13 @@ from mujoco_robot.tasks.cable_routing import (
     make_cable_routing_env,
     make_cable_routing_gymnasium,
 )
+from mujoco_robot.tasks.crazyflie import (
+    CrazyflieTaskConfig,
+    make_crazyflie_hover_env,
+    make_crazyflie_hover_gymnasium,
+    make_crazyflie_reach_env,
+    make_crazyflie_reach_gymnasium,
+)
 
 
 @dataclass(frozen=True)
@@ -74,6 +81,20 @@ TASK_REGISTRY: Dict[str, TaskSpec] = {
         config_type=CableRoutingTaskConfig,
         make_raw=make_cable_routing_env,
         make_gymnasium=make_cable_routing_gymnasium,
+    ),
+    "crazyflie_hover": TaskSpec(
+        name="crazyflie_hover",
+        description="Crazyflie 2.1 quadrotor hover stabilization task.",
+        config_type=CrazyflieTaskConfig,
+        make_raw=make_crazyflie_hover_env,
+        make_gymnasium=make_crazyflie_hover_gymnasium,
+    ),
+    "crazyflie_reach": TaskSpec(
+        name="crazyflie_reach",
+        description="Crazyflie 2.1 quadrotor reach-random-goals task.",
+        config_type=CrazyflieTaskConfig,
+        make_raw=make_crazyflie_reach_env,
+        make_gymnasium=make_crazyflie_reach_gymnasium,
     ),
 }
 
