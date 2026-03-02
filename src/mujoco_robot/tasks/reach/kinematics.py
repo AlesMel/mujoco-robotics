@@ -91,13 +91,8 @@ def ik_cartesian_joint_targets(
 
 
 def clamp_joint_targets(env: Any, targets: np.ndarray) -> np.ndarray:
-    """Clamp joint targets to model joint limits."""
-    out = np.asarray(targets, dtype=float).copy()
-    for k, jid in enumerate(env._robot_joint_ids):
-        lo, hi = env.model.jnt_range[jid]
-        if lo < hi:
-            out[k] = float(np.clip(out[k], lo, hi))
-    return out
+    """Clamp joint targets to model joint limits (vectorized)."""
+    return np.clip(targets, env._joint_lo, env._joint_hi)
 
 
 def ee_goal_distance(env: Any) -> float:

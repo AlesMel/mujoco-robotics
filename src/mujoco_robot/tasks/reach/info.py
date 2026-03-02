@@ -62,7 +62,7 @@ def build_step_info(
         "goals_resampled": env._goals_resampled,
         "self_collisions": env._self_collision_count,
         "ee_pos": env.data.site_xpos[env.ee_site].copy(),
-        "ee_quat": env._ee_quat(),
+        "ee_quat": env._cached_ee_quat().copy(),
         # Goal used to compute this step's dist/orientation metrics.
         "goal_pos": goal_pos_step,
         "goal_quat": goal_quat_step,

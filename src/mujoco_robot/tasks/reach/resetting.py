@@ -14,12 +14,13 @@ def reset_episode_state(env: Any, seed: int | None) -> None:
 
     mujoco.mj_resetData(env.model, env.data)
     env.step_id = 0
+    env._ee_quat_step_id = -1  # Invalidate EE cache
     env._success_tracker.reset()
     env._goals_resampled = 0
     env._self_collision_count = 0
-    env._last_targets = env.init_q.copy()
-    env._last_action = np.zeros(env.action_dim, dtype=np.float32)
-    env._prev_action = np.zeros(env.action_dim, dtype=np.float32)
+    env._last_targets[:] = env.init_q
+    env._last_action[:] = 0.0
+    env._prev_action[:] = 0.0
     env._last_reward = 0.0
     env._last_step_info = {}
     env._last_obs = None
@@ -30,38 +31,24 @@ def initialize_robot_state(env: Any) -> None:
     env._total_episodes += 1
 
     # --- 1. Set joints to canonical init_q and compute home EE orientation ---
-    for qi, (qpos_adr, dof_adr, act_id) in enumerate(
-        zip(env._robot_qpos_ids, env.robot_dofs, env.robot_actuators)
-    ):
-        env.data.qpos[qpos_adr] = env.init_q[qi]
-        env.data.qvel[dof_adr] = 0.0
-        env.data.ctrl[act_id] = env.init_q[qi]
+    # Vectorized writes instead of per-joint Python loop.
+    env.data.qpos[env._qpos_idx] = env.init_q
+    env.data.qvel[env._dof_idx] = 0.0
+    env.data.ctrl[env._act_idx] = env.init_q
     mujoco.mj_forward(env.model, env.data)
+    env._ee_quat_step_id = -1
     env._home_quat = env._ee_quat()
 
     # --- 2. Optionally randomize from init_q ---
-    for qi, (jid, qpos_adr, dof_adr, act_id) in enumerate(
-        zip(
-            env._robot_joint_ids,
-            env._robot_qpos_ids,
-            env.robot_dofs,
-            env.robot_actuators,
-        )
-    ):
-        q_home = env.init_q[qi]
-        if env.randomize_init:
-            scale = float(env._rng.uniform(*env.init_q_range))
-            q_home = q_home * scale
-            lo, hi = env.model.jnt_range[jid]
-            if lo < hi:
-                q_home = float(np.clip(q_home, lo, hi))
-        env.data.qpos[qpos_adr] = q_home
-        env.data.qvel[dof_adr] = 0.0
-        env.data.ctrl[act_id] = q_home
+    if env.randomize_init:
+        scales = env._rng.uniform(*env.init_q_range, size=len(env.init_q))
+        q_rand = env.init_q * scales
+        q_rand = np.clip(q_rand, env._joint_lo, env._joint_hi)
+        env.data.qpos[env._qpos_idx] = q_rand
+        env.data.qvel[env._dof_idx] = 0.0
+        env.data.ctrl[env._act_idx] = q_rand
 
-    for qi, qpos_adr in enumerate(env._robot_qpos_ids):
-        env._last_targets[qi] = env.data.qpos[qpos_adr]
-
+    env._last_targets[:] = env.data.qpos[env._qpos_idx]
     mujoco.mj_forward(env.model, env.data)
 
 

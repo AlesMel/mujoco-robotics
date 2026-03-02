@@ -5,23 +5,19 @@ import numpy as np
 
 
 def joint_pos_rel(env) -> np.ndarray:
-    out = np.empty(len(env._robot_qpos_ids), dtype=np.float32)
-    for i, qpos_adr in enumerate(env._robot_qpos_ids):
-        out[i] = float(env.data.qpos[qpos_adr] - env.init_q[i])
-    return out
+    # Vectorized fancy indexing — avoids per-joint Python loop.
+    return (env.data.qpos[env._qpos_idx] - env._init_q_f32).astype(np.float32)
 
 
 def joint_vel_rel(env) -> np.ndarray:
-    out = np.empty(len(env.robot_dofs), dtype=np.float32)
-    for i, dof_adr in enumerate(env.robot_dofs):
-        out[i] = float(env.data.qvel[dof_adr])
-    return out
+    # Vectorized fancy indexing — avoids per-joint Python loop.
+    return env.data.qvel[env._dof_idx].astype(np.float32)
 
 
 def generated_commands_ee_pose(env) -> np.ndarray:
     # During ObservationManager dim inference, command manager may not yet exist.
     try:
-        return env._manager("command").pose_command.astype(np.float32)
+        return env._manager("command")._pose_command.copy()
     except KeyError:
         goal_pos_base = env.goal_pos - env._BASE_POS
         return np.concatenate(
@@ -29,8 +25,23 @@ def generated_commands_ee_pose(env) -> np.ndarray:
         )
 
 
+# Pre-allocated buffer for ee_pose_base to avoid per-step allocation.
+_ee_pose_buf = np.empty(7, dtype=np.float32)
+
+
+def ee_pose_base(env) -> np.ndarray:
+    """Current EE pose in base frame: [pos_xyz(3), quat_wxyz(4)] → 7-D.
+
+    Providing the EE orientation explicitly makes it much easier for the
+    policy to learn orientation tracking (vs. inferring FK from joint angles).
+    """
+    _ee_pose_buf[:3] = env.data.site_xpos[env.ee_site] - env._BASE_POS
+    _ee_pose_buf[3:] = env._cached_ee_quat()
+    return _ee_pose_buf.copy()
+
+
 def last_action(env) -> np.ndarray:
-    return env._last_action.astype(np.float32).copy()
+    return env._last_action.copy()
 
 
 # Backward-compatible aliases for existing imports.

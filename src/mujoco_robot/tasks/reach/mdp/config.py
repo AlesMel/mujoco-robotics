@@ -52,6 +52,7 @@ def default_observation_terms() -> tuple[ObservationTermCfg, ...]:
     return (
         ObservationTermCfg(name="joint_pos", fn=observations.joint_pos_rel),
         ObservationTermCfg(name="joint_vel", fn=observations.joint_vel_rel),
+        ObservationTermCfg(name="ee_pose", fn=observations.ee_pose_base),
         ObservationTermCfg(name="pose_command", fn=observations.generated_commands_ee_pose),
         ObservationTermCfg(name="actions", fn=observations.last_action),
     )

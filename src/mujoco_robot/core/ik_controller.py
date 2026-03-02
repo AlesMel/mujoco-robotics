@@ -22,8 +22,18 @@ import numpy as np
 def _mat_to_quat(mat3x3: np.ndarray) -> np.ndarray:
     """Convert a 3×3 rotation matrix to a unit quaternion (w,x,y,z).
 
-    Uses Shepperd's method for numerical stability.
+    Uses MuJoCo's C implementation when available, with a pure-Python
+    Shepperd fallback.
     """
+    # Fast path: MuJoCo's C implementation (~10× faster than Python)
+    quat_out = np.empty(4, dtype=np.float64)
+    try:
+        mujoco.mju_mat2Quat(quat_out, mat3x3.ravel())
+        return quat_out
+    except (AttributeError, TypeError):
+        pass
+
+    # Fallback: Shepperd's method
     m = mat3x3
     trace = m[0, 0] + m[1, 1] + m[2, 2]
     if trace > 0:
@@ -192,6 +202,16 @@ class IKController:
         self.damping = damping
         self.position_weight = position_weight
 
+        # Pre-allocate Jacobian buffers to avoid per-solve heap allocation.
+        self._jacp = np.zeros((3, model.nv))
+        self._jacr = np.zeros((3, model.nv))
+        self._dof_cols = np.asarray(robot_dofs, dtype=np.intp)
+        n_j = len(robot_dofs)
+        self._J = np.empty((6, n_j))
+        self._target_vec = np.empty(6)
+        self._eye6 = np.eye(6)
+        self._quat_buf = np.empty(4, dtype=np.float64)
+
     # ------------------------------------------------------------------ API
     def ee_position(self) -> np.ndarray:
         """Current EE position (3-D)."""
@@ -200,10 +220,14 @@ class IKController:
     def ee_quat(self) -> np.ndarray:
         """Current EE orientation as unit quaternion (w,x,y,z).
 
-        Computed from the site's 3×3 rotation matrix.
+        Uses pre-allocated buffer with MuJoCo C call for speed.
         """
         mat = self.data.site_xmat[self.ee_site].reshape(3, 3)
-        return _mat_to_quat(mat)
+        try:
+            mujoco.mju_mat2Quat(self._quat_buf, mat.ravel())
+            return self._quat_buf.copy()
+        except (AttributeError, TypeError):
+            return _mat_to_quat(mat)
 
     def solve(
         self,
@@ -224,8 +248,10 @@ class IKController:
         qvel : (n_joints,) array
             Joint-velocity command.
         """
-        jacp = np.zeros((3, self.model.nv))
-        jacr = np.zeros((3, self.model.nv))
+        jacp = self._jacp
+        jacr = self._jacr
+        jacp[:] = 0.0
+        jacr[:] = 0.0
         mujoco.mj_jacSite(self.model, self.data, jacp, jacr, self.ee_site)
 
         pos_err = target_pos - self.data.site_xpos[self.ee_site]
@@ -245,13 +271,15 @@ class IKController:
         # Weight position error so the solver prioritises position
         # tracking over orientation when both are far from target.
         w = self.position_weight
-        cols = self.robot_dofs
-        J_pos = jacp[:, cols] * w        # (3, n_joints)
-        J_rot = jacr[:, cols]            # (3, n_joints)
-        J = np.vstack([J_pos, J_rot])    # (6, n_joints)
+        cols = self._dof_cols
+        self._J[:3] = jacp[:, cols] * w
+        self._J[3:] = jacr[:, cols]
+        J = self._J
 
-        target_vec = np.concatenate([pos_err * w, ori_err])  # (6,)
+        self._target_vec[:3] = pos_err * w
+        self._target_vec[3:] = ori_err
 
         lam = self.damping
-        JJT = J @ J.T + (lam ** 2) * np.eye(6)
-        return J.T @ np.linalg.solve(JJT, target_vec)
+        JJT = J @ J.T
+        JJT += (lam ** 2) * self._eye6
+        return J.T @ np.linalg.solve(JJT, self._target_vec)

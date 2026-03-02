@@ -4,7 +4,15 @@ from __future__ import annotations
 import math
 
 from ..mdp import ReachRewardCfg
-from ..reach_env_cfg import ActionCfg, CommandCfg, ManagerCfg, PhysicsCfg, ReachEnvCfg, SceneCfg
+from ..reach_env_cfg import (
+    ActionCfg,
+    CommandCfg,
+    ManagerCfg,
+    PhysicsCfg,
+    ReachEnvCfg,
+    SceneCfg,
+    SuccessCfg,
+)
 
 
 def make_ur3e_joint_pos_cfg() -> ReachEnvCfg:
@@ -15,6 +23,15 @@ def make_ur3e_joint_pos_cfg() -> ReachEnvCfg:
             goal_roll_range=(0.0, 0.0),
             goal_pitch_range=(0.0, 0.0),
             goal_yaw_range=(-math.pi, math.pi),
+            # Resample goal every 4s — creates implicit speed pressure.
+            # At control_dt=0.0333s, 4s ≈ 120 steps per goal.
+            # Default time_limit=360 steps (12s) → 3 goals minimum.
+            goal_resample_time_range_s=(4.0, 4.0),
+        ),
+        success=SuccessCfg(
+            # Reaching early triggers an immediate new goal, so the agent
+            # can encounter more than 3 goals per episode if it's fast.
+            resample_on_success=True,
         ),
         physics=PhysicsCfg(
             actuator_kp=500.0,
@@ -25,7 +42,7 @@ def make_ur3e_joint_pos_cfg() -> ReachEnvCfg:
             reward_cfg=ReachRewardCfg(
                 reward_mode="dense_bounded",
                 dense_position_std=0.05,
-                dense_orientation_std=0.2,
+                dense_orientation_std=0.5,
                 dense_position_weight=0.7,
                 dense_orientation_weight=0.3,
                 clip_to_unit_interval=True,

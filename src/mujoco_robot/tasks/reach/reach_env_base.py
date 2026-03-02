@@ -158,16 +158,17 @@ class URReachEnvBase:
     control variant (see ``reach_env_ik_rel.py``, ``reach_env_ik_abs.py``,
     ``reach_env_joint_pos.py``).
 
-    Observation (19 + action_dim = 25):
+    Observation (26 + action_dim = 32):
         ============== ===== ===================================
         Component      Dim   Description
         ============== ===== ===================================
         joint_pos        6   joint angles relative to home (noise ±0.01)
         joint_vel        6   joint velocities (noise ±0.01)
+        ee_pose          7   current EE pose in base frame (pos_xyz, quat_wxyz)
         pose_command     7   goal pose in base frame (pos_xyz, quat_wxyz)
         actions          6   previous action (zeros at reset)
         ============== ===== ===================================
-        → total = 25   (matches Isaac Lab reach env exactly)
+        → total = 32
 
     Reward (default manager cfg):
         Dense bounded proximity in ``[0, 1]`` with configurable position/orientation
@@ -298,7 +299,7 @@ class URReachEnvBase:
         self.ik_damping = 0.02
         self.hold_eps = 0.0
         self.n_substeps = 2
-        self.settle_steps = 300
+        self.settle_steps = 100
 
         # Robot-specific home pose and workspace bounds
         self.init_q = cfg.init_q.copy()
@@ -311,6 +312,27 @@ class URReachEnvBase:
 
         # ---- Build MuJoCo scene (model, renderers, actuators, IK) ----
         build_reach_scene(self)
+
+        # ---- Pre-computed numpy index arrays for vectorized obs/clamp ----
+        self._qpos_idx = np.array(self._robot_qpos_ids, dtype=np.intp)
+        self._dof_idx = np.array(self.robot_dofs, dtype=np.intp)
+        self._init_q_f32 = self.init_q.astype(np.float32)
+        # Joint limit vectors for vectorized np.clip in clamp_joint_targets
+        n_j = len(self._robot_joint_ids)
+        self._joint_lo = np.full(n_j, -np.inf)
+        self._joint_hi = np.full(n_j, np.inf)
+        for k, jid in enumerate(self._robot_joint_ids):
+            lo, hi = self.model.jnt_range[jid]
+            if lo < hi:
+                self._joint_lo[k] = lo
+                self._joint_hi[k] = hi
+
+        # ---- Per-step EE quaternion cache (avoids 3× recomputation) ----
+        self._ee_quat_cache: np.ndarray = np.array([1.0, 0.0, 0.0, 0.0])
+        self._ee_quat_step_id: int = -1
+
+        # ---- Pre-computed actuator index array for vectorized ctrl ----
+        self._act_idx = np.array(self.robot_actuators, dtype=np.intp)
 
         # State
         self._last_targets = self.init_q.copy()
@@ -510,9 +532,16 @@ class URReachEnvBase:
         mujoco.mj_forward(self.model, self.data)
 
     # -------------------------------------------------------------- IK + control helpers
+    def _cached_ee_quat(self) -> np.ndarray:
+        """Return cached EE quaternion for the current step (avoids recomputation)."""
+        if self._ee_quat_step_id != self.step_id:
+            self._ee_quat_cache = ee_quaternion(self)
+            self._ee_quat_step_id = self.step_id
+        return self._ee_quat_cache
+
     def _ee_quat(self) -> np.ndarray:
         """Current EE orientation as unit quaternion (w,x,y,z)."""
-        return ee_quaternion(self)
+        return self._cached_ee_quat()
 
     def _desired_ee_relative(
         self,
@@ -643,21 +672,24 @@ class URReachEnvBase:
         StepResult
             Named result with ``obs``, ``reward``, ``done``, ``info``.
         """
-        act = np.asarray(action, dtype=float).flatten()
+        act = np.asarray(action, dtype=np.float64).ravel()
         if act.shape[0] != self.action_dim:
             raise ValueError(f"Expected action dim {self.action_dim}, got {act.shape[0]}")
-        act = np.clip(act, -1.0, 1.0)
+        np.clip(act, -1.0, 1.0, out=act)
 
-        self._prev_action = self._last_action.copy()
-        self._last_action = act.astype(np.float32).copy()
+        self._prev_action[:] = self._last_action
+        self._last_action[:] = act
+
+        # Invalidate EE quaternion cache for the new physics state.
+        self._ee_quat_step_id = -1
 
         # Delegate to configured action term via manager
         qpos_targets = self._manager("action").compute_joint_targets(act)
         qpos_targets = self._clamp_to_limits(qpos_targets)
-        self._last_targets = qpos_targets.copy()
+        self._last_targets[:] = qpos_targets
 
-        for k, act_id in enumerate(self.robot_actuators):
-            self.data.ctrl[act_id] = qpos_targets[k]
+        # Vectorized ctrl assignment instead of per-joint Python loop.
+        self.data.ctrl[self._act_idx] = qpos_targets
 
         for _ in range(self.n_substeps):
             mujoco.mj_step(self.model, self.data)

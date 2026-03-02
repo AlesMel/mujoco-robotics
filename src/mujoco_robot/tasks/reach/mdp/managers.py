@@ -85,7 +85,7 @@ class CommandManager:
 
     @property
     def pose_command(self) -> np.ndarray:
-        return self._pose_command.astype(np.float32).copy()
+        return self._pose_command.copy()
 
 
 class ObservationManager:
@@ -104,19 +104,21 @@ class ObservationManager:
         if not self._terms:
             return 0
         total = 0
+        self._term_slices: list[tuple[int, int]] = []
         for term in self._terms:
             sample = np.asarray(term.fn(self._env), dtype=np.float32).ravel()
-            total += int(sample.shape[0])
+            n = int(sample.shape[0])
+            self._term_slices.append((total, total + n))
+            total += n
         return total
 
     def observe(self) -> np.ndarray:
         if not self._terms:
             return np.zeros((0,), dtype=np.float32)
-        parts = [
-            np.asarray(term.fn(self._env), dtype=np.float32).ravel()
-            for term in self._terms
-        ]
-        return np.concatenate(parts).astype(np.float32)
+        buf = np.empty(self._dim, dtype=np.float32)
+        for term, (lo, hi) in zip(self._terms, self._term_slices):
+            buf[lo:hi] = np.asarray(term.fn(self._env), dtype=np.float32).ravel()
+        return buf
 
 
 class RewardManager:
@@ -125,21 +127,37 @@ class RewardManager:
     def __init__(self, env: Any, terms: tuple[RewardTermCfg, ...]):
         self._env = env
         self._terms = terms
+        # Pre-classify weights: separate static floats from dynamic callables
+        # to avoid callable() check on every step.
+        self._static_terms: list[tuple[RewardTermCfg, float]] = []
+        self._dynamic_terms: list[RewardTermCfg] = []
+        for term in terms:
+            if not term.enabled:
+                continue
+            if callable(term.weight):
+                self._dynamic_terms.append(term)
+            else:
+                self._static_terms.append((term, float(term.weight)))
 
     def compute(self, ctx: dict[str, float]) -> tuple[float, dict[str, float], dict[str, float]]:
         total = 0.0
         raw_terms: dict[str, float] = {}
         weighted_terms: dict[str, float] = {}
 
-        for term in self._terms:
-            if not term.enabled:
-                continue
+        for term, w in self._static_terms:
             raw = float(term.fn(self._env, ctx))
-            weight = term.weight(self._env) if callable(term.weight) else float(term.weight)
-            weighted = weight * raw
+            weighted = w * raw
             total += weighted
             raw_terms[term.name] = raw
-            weighted_terms[term.name] = float(weighted)
+            weighted_terms[term.name] = weighted
+
+        for term in self._dynamic_terms:
+            raw = float(term.fn(self._env, ctx))
+            w = float(term.weight(self._env))
+            weighted = w * raw
+            total += weighted
+            raw_terms[term.name] = raw
+            weighted_terms[term.name] = weighted
 
         return float(total), raw_terms, weighted_terms
 
