@@ -9,12 +9,16 @@ from mujoco_robot.tasks.crazyflie.config import (
     make_crazyflie_hover_flowdeck_cfg,
     make_crazyflie_reach_cfg,
     make_crazyflie_reach_dense_stable_cfg,
+    make_crazyflie_obstacle_cfg,
+    make_crazyflie_obstacle_dense_stable_cfg,
 )
 from mujoco_robot.tasks.crazyflie.factory import (
     make_crazyflie_hover_env,
     make_crazyflie_hover_gymnasium,
     make_crazyflie_reach_env,
     make_crazyflie_reach_gymnasium,
+    make_crazyflie_obstacle_env,
+    make_crazyflie_obstacle_gymnasium,
 )
 from mujoco_robot.tasks.crazyflie.crazyflie_env import (
     CrazyflieHoverEnv,
@@ -23,6 +27,10 @@ from mujoco_robot.tasks.crazyflie.crazyflie_env import (
 from mujoco_robot.tasks.crazyflie.crazyflie_reach_env import (
     CrazyflieReachEnv,
     CrazyflieReachGymnasium,
+)
+from mujoco_robot.tasks.crazyflie.crazyflie_obstacle_env import (
+    CrazyflieObstacleEnv,
+    CrazyflieObstacleGymnasium,
 )
 
 __all__ = [
@@ -42,4 +50,10 @@ __all__ = [
     "make_crazyflie_hover_gymnasium",
     "make_crazyflie_reach_env",
     "make_crazyflie_reach_gymnasium",
+    "make_crazyflie_obstacle_cfg",
+    "make_crazyflie_obstacle_dense_stable_cfg",
+    "CrazyflieObstacleEnv",
+    "CrazyflieObstacleGymnasium",
+    "make_crazyflie_obstacle_env",
+    "make_crazyflie_obstacle_gymnasium",
 ]

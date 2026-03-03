@@ -32,6 +32,8 @@ from mujoco_robot.tasks.crazyflie import (
     make_crazyflie_hover_gymnasium,
     make_crazyflie_reach_env,
     make_crazyflie_reach_gymnasium,
+    make_crazyflie_obstacle_env,
+    make_crazyflie_obstacle_gymnasium,
 )
 
 
@@ -95,6 +97,13 @@ TASK_REGISTRY: Dict[str, TaskSpec] = {
         config_type=CrazyflieTaskConfig,
         make_raw=make_crazyflie_reach_env,
         make_gymnasium=make_crazyflie_reach_gymnasium,
+    ),
+    "crazyflie_obstacle": TaskSpec(
+        name="crazyflie_obstacle",
+        description="Crazyflie 2.1 obstacle-avoidance reach task with rangefinder.",
+        config_type=CrazyflieTaskConfig,
+        make_raw=make_crazyflie_obstacle_env,
+        make_gymnasium=make_crazyflie_obstacle_gymnasium,
     ),
 }
 

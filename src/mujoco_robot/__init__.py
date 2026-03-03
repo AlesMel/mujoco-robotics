@@ -137,3 +137,12 @@ gymnasium.register(
     ),
     max_episode_steps=800,
 )
+
+gymnasium.register(
+    id="MuJoCoRobot/Crazyflie-Obstacle-v0",
+    entry_point=(
+        "mujoco_robot.tasks.crazyflie.crazyflie_obstacle_env:"
+        "CrazyflieObstacleGymnasium"
+    ),
+    max_episode_steps=800,
+)

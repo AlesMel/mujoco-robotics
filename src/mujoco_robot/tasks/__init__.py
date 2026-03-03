@@ -35,6 +35,8 @@ from mujoco_robot.tasks.crazyflie import (
     make_crazyflie_hover_gymnasium,
     make_crazyflie_reach_env,
     make_crazyflie_reach_gymnasium,
+    make_crazyflie_obstacle_env,
+    make_crazyflie_obstacle_gymnasium,
 )
 from mujoco_robot.tasks.registry import (
     TaskSpec,
@@ -84,6 +86,8 @@ __all__ = [
     "make_crazyflie_hover_gymnasium",
     "make_crazyflie_reach_env",
     "make_crazyflie_reach_gymnasium",
+    "make_crazyflie_obstacle_env",
+    "make_crazyflie_obstacle_gymnasium",
     "TaskSpec",
     "TASK_REGISTRY",
     "get_task_spec",
