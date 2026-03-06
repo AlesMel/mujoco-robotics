@@ -297,13 +297,10 @@ class CrazyflieReachEnv:
         else:
             self._goal_mocap_id = -1
 
-        # Renderers (side=hero 3D, top=overhead; chase & closeup dropped)
-        self._camera_names = ["cf_side", "cf_top"]
-        rw, rh = self.render_size
-        self._renderers = [
-            mujoco.Renderer(self.model, height=rh, width=rw)
-            for _ in self._camera_names
-        ]
+        # Renderers — created lazily on first render() call so that training
+        # envs (render_mode=None) never allocate OpenGL contexts.
+        self._camera_names = ["cf_chase", "cf_top", "cf_side", "cf_closeup"]
+        self._renderers = []
 
         # ---------- State ----------
         self.step_id = 0
@@ -323,30 +320,6 @@ class CrazyflieReachEnv:
         self._last_reward = 0.0
         self._last_ground_effect_mean = 1.0
         self._last_info: Dict[str, float | bool | int] = {}
-
-        # ---- Odometry history for graph rendering ----
-        _N = 200  # ring buffer length (~2 s at 100 Hz control)
-        self._odom_buf_size = _N
-        self._odom_idx = 0
-        self._odom_len = 0
-        self._odom = {
-            "alt":    np.zeros(_N, dtype=np.float32),
-            "goal_z": np.zeros(_N, dtype=np.float32),
-            "dist":   np.zeros(_N, dtype=np.float32),
-            "roll":   np.zeros(_N, dtype=np.float32),
-            "pitch":  np.zeros(_N, dtype=np.float32),
-            "yaw":    np.zeros(_N, dtype=np.float32),
-            "m1":     np.zeros(_N, dtype=np.float32),
-            "m2":     np.zeros(_N, dtype=np.float32),
-            "m3":     np.zeros(_N, dtype=np.float32),
-            "m4":     np.zeros(_N, dtype=np.float32),
-            "speed":  np.zeros(_N, dtype=np.float32),
-            "reward": np.zeros(_N, dtype=np.float32),
-            "pos_x":  np.zeros(_N, dtype=np.float32),
-            "pos_y":  np.zeros(_N, dtype=np.float32),
-            "goal_x": np.zeros(_N, dtype=np.float32),
-            "goal_y": np.zeros(_N, dtype=np.float32),
-        }
 
     # ================================================================== Setup
     def _load_model_xml(self, model_path: str) -> str:
@@ -639,12 +612,6 @@ class CrazyflieReachEnv:
         self._last_reward = 0.0
         self._last_info = {}
 
-        # Clear odometry history
-        self._odom_idx = 0
-        self._odom_len = 0
-        for v in self._odom.values():
-            v[:] = 0.0
-
         self._update_goal_marker()
         mujoco.mj_forward(self.model, self.data)
         return self._observe()
@@ -873,7 +840,6 @@ class CrazyflieReachEnv:
         reward, done, info = self._compute_reward_and_info()
         self._last_reward = reward
         self._last_info = dict(info)
-        self._record_odom(reward)
         return StepResult(obs=self._observe(), reward=reward, done=done, info=info)
 
     def render(self, mode: str = "human") -> Optional[np.ndarray]:
@@ -882,557 +848,57 @@ class CrazyflieReachEnv:
         if mode != "rgb_array":
             raise ValueError("mode must be 'human' or 'rgb_array'")
 
-        rw, rh = self.render_size
+        if not self._renderers:
+            rw, rh = self.render_size
+            self._renderers = [
+                mujoco.Renderer(self.model, height=rh, width=rw)
+                for _ in self._camera_names
+            ]
 
-        # Render two camera views: side (hero 3D) and top (overhead)
         frames = []
         for renderer, cam_name in zip(self._renderers, self._camera_names):
             renderer.update_scene(self.data, camera=cam_name)
-            frames.append(renderer.render().copy())
+            frames.append(renderer.render())
 
-        side_frame = frames[0]
-        top_frame = frames[1]
-
-        # Synthetic panels
-        minimap = self._draw_minimap((rh, rw))
-        instruments = self._draw_metrics_overlay((rh, rw))
-
-        # Uniform panel title bars
-        self._add_panel_label(side_frame, "3D  SIDE  VIEW")
-        self._add_panel_label(top_frame, "TOP  VIEW")
-        self._add_panel_label(minimap, "XY  TRAJECTORY")
-        self._add_panel_label(instruments, "TELEMETRY")
-
-        # Compose 2x2:  [side | top]  /  [minimap | instruments]
-        top_row = np.concatenate([side_frame, top_frame], axis=1)
-        bottom_row = np.concatenate([minimap, instruments], axis=1)
-        composite = np.concatenate([top_row, bottom_row], axis=0)
-
-        # Teal accent borders
-        bdr = (42, 160, 190)
-        composite[rh - 1:rh + 1, :] = bdr        # horizontal split
-        composite[:, rw - 1:rw + 1] = bdr        # vertical split
-        composite[0:2, :] = bdr                    # outer frame
-        composite[-2:, :] = bdr
-        composite[:, 0:2] = bdr
-        composite[:, -2:] = bdr
-
-        return composite
-
-    # ---- Panel helpers --------------------------------------------------
-
-    def _add_panel_label(self, frame: np.ndarray, label: str,
-                         accent: tuple = (42, 160, 190)) -> None:
-        """Overlay a slim title bar at the top of any panel."""
-        h, w = frame.shape[:2]
-        bar_h = 20
-        # Semi-transparent darken
-        frame[:bar_h, :] = (
-            frame[:bar_h, :].astype(np.float32) * 0.3
-        ).astype(np.uint8)
-        # Accent underline
-        if bar_h < h:
-            frame[bar_h, :] = accent
-        # Title text
-        self._burn_text_lines(
-            frame, [label], x=8, y=4, scale=1,
-            color=(200, 215, 230), line_height=14,
-        )
-
-    def _draw_minimap(self, shape: tuple) -> np.ndarray:
-        """Draw a 2-D top-down trajectory map with trail, goal, heading."""
-        h, w = shape[0], shape[1]
-        panel = np.zeros((h, w, 3), dtype=np.uint8)
-
-        # Gradient background (dark blue-gray)
-        for row in range(h):
-            t = row / max(h - 1, 1)
-            panel[row, :] = (
-                int(16 + 10 * t), int(20 + 8 * t), int(28 + 6 * t)
-            )
-
-        # Layout constants
-        label_h = 24           # panel-label bar at top
-        info_h = 38            # bottom text area
-        pad = 28               # left / right margin
-        alt_bar_w = 16         # altitude bar width
-        gap = 6                # gap before altitude bar
-
-        map_x0 = pad
-        map_y0 = label_h + 6
-        map_w = w - 2 * pad - alt_bar_w - gap
-        map_h = h - map_y0 - info_h
-        if map_w < 40 or map_h < 40:
-            return panel
-
-        ws = self.workspace_xy * 1.15  # world half-size with padding
-
-        def _w2p(wx, wy):
-            px = map_x0 + int((wx + ws) / (2.0 * ws) * map_w)
-            py = map_y0 + int((ws - wy) / (2.0 * ws) * map_h)
-            return (
-                int(np.clip(px, 0, w - 1)),
-                int(np.clip(py, 0, h - 1)),
-            )
-
-        # Map background
-        panel[map_y0:map_y0 + map_h, map_x0:map_x0 + map_w] = (22, 26, 34)
-
-        # Grid lines (every 0.25 m)
-        for gv in np.arange(-1.0, 1.01, 0.25):
-            px_g, _ = _w2p(gv, 0)
-            if map_x0 < px_g < map_x0 + map_w - 1:
-                panel[map_y0 + 1:map_y0 + map_h - 1, px_g] = (32, 36, 44)
-            _, py_g = _w2p(0, gv)
-            if map_y0 < py_g < map_y0 + map_h - 1:
-                panel[py_g, map_x0 + 1:map_x0 + map_w - 1] = (32, 36, 44)
-
-        # Origin axes (brighter)
-        ox, oy = _w2p(0, 0)
-        if map_y0 < oy < map_y0 + map_h - 1:
-            panel[oy, map_x0 + 1:map_x0 + map_w - 1] = (42, 46, 58)
-        if map_x0 < ox < map_x0 + map_w - 1:
-            panel[map_y0 + 1:map_y0 + map_h - 1, ox] = (42, 46, 58)
-
-        # Workspace boundary (solid)
-        bnd = [
-            _w2p(-self.workspace_xy, self.workspace_xy),
-            _w2p(self.workspace_xy, self.workspace_xy),
-            _w2p(self.workspace_xy, -self.workspace_xy),
-            _w2p(-self.workspace_xy, -self.workspace_xy),
-        ]
-        bc = (55, 75, 100)
-        for i in range(4):
-            self._bresenham(
-                panel, bnd[i][0], bnd[i][1],
-                bnd[(i + 1) % 4][0], bnd[(i + 1) % 4][1], bc,
-            )
-
-        # Goal volume boundary (dashed green)
-        gvb = [
-            _w2p(-self.goal_xy_range, self.goal_xy_range),
-            _w2p(self.goal_xy_range, self.goal_xy_range),
-            _w2p(self.goal_xy_range, -self.goal_xy_range),
-            _w2p(-self.goal_xy_range, -self.goal_xy_range),
-        ]
-        gc_dim = (36, 58, 42)
-        for i in range(4):
-            sx0, sy0 = gvb[i]
-            sx1, sy1 = gvb[(i + 1) % 4]
-            seg_len = max(abs(sx1 - sx0), abs(sy1 - sy0), 1)
-            for s in range(0, seg_len, 8):
-                t0 = s / seg_len
-                t1 = min((s + 4) / seg_len, 1.0)
-                self._bresenham(
-                    panel,
-                    int(sx0 + (sx1 - sx0) * t0),
-                    int(sy0 + (sy1 - sy0) * t0),
-                    int(sx0 + (sx1 - sx0) * t1),
-                    int(sy0 + (sy1 - sy0) * t1),
-                    gc_dim,
-                )
-
-        # ---- Drone trail (fading cyan) ----
-        pos_x = self._odom_ordered("pos_x")
-        pos_y = self._odom_ordered("pos_y")
-        n_trail = len(pos_x)
-        if n_trail > 1:
-            for j in range(n_trail - 1):
-                frac = j / max(n_trail - 1, 1)
-                cr = int(30 + 65 * frac)
-                cg = int(55 + 140 * frac)
-                cb = int(100 + 155 * frac)
-                px0, py0 = _w2p(pos_x[j], pos_y[j])
-                px1, py1 = _w2p(pos_x[j + 1], pos_y[j + 1])
-                # Skip jumps (e.g. episode boundary)
-                if abs(px1 - px0) + abs(py1 - py0) < map_w // 2:
-                    self._bresenham(panel, px0, py0, px1, py1, (cr, cg, cb))
-
-        # ---- Goal marker (green cross + ring) ----
-        gx, gy = _w2p(self._goal_pos[0], self._goal_pos[1])
-        gc = (80, 255, 120)
-        for d in range(-7, 8):
-            for off in (-1, 0, 1):
-                yy, xx = gy + off, gx + d
-                if 0 <= yy < h and 0 <= xx < w:
-                    panel[yy, xx] = gc
-                yy2, xx2 = gy + d, gx + off
-                if 0 <= yy2 < h and 0 <= xx2 < w:
-                    panel[yy2, xx2] = gc
-        for a_i in range(40):
-            ang = a_i * 2.0 * math.pi / 40
-            rx = gx + int(11 * math.cos(ang))
-            ry = gy + int(11 * math.sin(ang))
-            for dt in (0, 1):
-                if 0 <= ry + dt < h and 0 <= rx < w:
-                    panel[ry + dt, rx] = gc
-
-        # ---- Drone position & heading (orange) ----
-        pos_now, quat_now, _, _, _ = self._body_state()
-        _, _, yaw_now = self._quat_to_euler_deg(quat_now)
-        dpx, dpy = _w2p(pos_now[0], pos_now[1])
-        dc = (255, 180, 50)
-        # Filled circle r≈4
-        for oy in range(-4, 5):
-            for oxx in range(-4, 5):
-                if oxx * oxx + oy * oy <= 18:
-                    yy, xx = dpy + oy, dpx + oxx
-                    if 0 <= yy < h and 0 <= xx < w:
-                        panel[yy, xx] = dc
-        # Heading arrow
-        yaw_r = math.radians(yaw_now)
-        alen = 18
-        ax = dpx + int(alen * math.cos(yaw_r))
-        ay = dpy - int(alen * math.sin(yaw_r))
-        self._bresenham(panel, dpx, dpy, ax, ay, dc)
-        # Arrowhead
-        for da in (-0.5, 0.5):
-            hx = ax - int(6 * math.cos(yaw_r + da))
-            hy = ay + int(6 * math.sin(yaw_r + da))
-            self._bresenham(panel, ax, ay, hx, hy, dc)
-
-        # ---- Altitude bar (right side) ----
-        bar_x = map_x0 + map_w + gap
-        bar_y = map_y0
-        bar_h_px = map_h
-        panel[bar_y:bar_y + bar_h_px, bar_x:bar_x + alt_bar_w] = (28, 30, 38)
-        # Border
-        panel[bar_y:bar_y + bar_h_px, bar_x] = (50, 55, 65)
-        panel[bar_y:bar_y + bar_h_px, bar_x + alt_bar_w - 1] = (50, 55, 65)
-        panel[bar_y, bar_x:bar_x + alt_bar_w] = (50, 55, 65)
-        panel[bar_y + bar_h_px - 1, bar_x:bar_x + alt_bar_w] = (50, 55, 65)
-        # Altitude fill (blue)
-        z_top = max(self.workspace_z[1], 1.0)
-        z_cur = float(np.clip(pos_now[2], 0, z_top))
-        fill_pix = int(z_cur / z_top * (bar_h_px - 2))
-        if fill_pix > 0:
-            panel[
-                bar_y + bar_h_px - 1 - fill_pix:bar_y + bar_h_px - 1,
-                bar_x + 1:bar_x + alt_bar_w - 1,
-            ] = (50, 130, 200)
-        # Goal altitude (green line)
-        gz_frac = float(np.clip(self._goal_pos[2] / z_top, 0, 1))
-        gz_py = bar_y + bar_h_px - 1 - int(gz_frac * (bar_h_px - 2))
-        if bar_y < gz_py < bar_y + bar_h_px - 1:
-            panel[gz_py, bar_x + 1:bar_x + alt_bar_w - 1] = (80, 255, 120)
-
-        # ---- Bottom info text ----
-        dist_now = float(np.linalg.norm(self._goal_pos - pos_now))
-        iy = h - info_h + 2
-        self._burn_text_lines(
-            panel,
-            [
-                f"Pos ({pos_now[0]:+.2f},{pos_now[1]:+.2f})  Z {pos_now[2]:.2f}m",
-                f"Goal({self._goal_pos[0]:+.2f},{self._goal_pos[1]:+.2f})  D {dist_now:.3f}m",
-            ],
-            x=pad, y=iy, scale=1, color=(120, 135, 155), line_height=16,
-        )
-
-        return panel
-
-    # ---- Odometry recording & graphing ---------------------------------
-
-    @staticmethod
-    def _quat_to_euler_deg(q):
-        """MuJoCo [w,x,y,z] quaternion → (roll, pitch, yaw) in degrees."""
-        w, x, y, z = q
-        sinr = 2.0 * (w * x + y * z)
-        cosr = 1.0 - 2.0 * (x * x + y * y)
-        roll = math.atan2(sinr, cosr)
-        sinp = 2.0 * (w * y - z * x)
-        sinp = max(-1.0, min(1.0, sinp))
-        pitch = math.asin(sinp)
-        siny = 2.0 * (w * z + x * y)
-        cosy = 1.0 - 2.0 * (y * y + z * z)
-        yaw = math.atan2(siny, cosy)
-        return math.degrees(roll), math.degrees(pitch), math.degrees(yaw)
-
-    def _record_odom(self, reward: float) -> None:
-        """Push one sample into the ring buffer."""
-        pos, quat, lin_vel_world, _ang, _rot = self._body_state()
-        roll, pitch, yaw = self._quat_to_euler_deg(quat)
-        i = self._odom_idx
-        o = self._odom
-        o["alt"][i] = pos[2]
-        o["goal_z"][i] = self._goal_pos[2]
-        o["dist"][i] = float(np.linalg.norm(self._goal_pos - pos))
-        o["roll"][i] = roll
-        o["pitch"][i] = pitch
-        o["yaw"][i] = yaw
-        o["m1"][i] = self.motor_omega[0] / self.max_motor_omega
-        o["m2"][i] = self.motor_omega[1] / self.max_motor_omega
-        o["m3"][i] = self.motor_omega[2] / self.max_motor_omega
-        o["m4"][i] = self.motor_omega[3] / self.max_motor_omega
-        o["speed"][i] = float(np.linalg.norm(lin_vel_world))
-        o["reward"][i] = reward
-        o["pos_x"][i] = pos[0]
-        o["pos_y"][i] = pos[1]
-        o["goal_x"][i] = self._goal_pos[0]
-        o["goal_y"][i] = self._goal_pos[1]
-        self._odom_idx = (i + 1) % self._odom_buf_size
-        self._odom_len = min(self._odom_len + 1, self._odom_buf_size)
-
-    def _odom_ordered(self, key: str) -> np.ndarray:
-        """Return the ring buffer contents in chronological order."""
-        n = self._odom_len
-        if n == 0:
-            return np.zeros(1, dtype=np.float32)
-        buf = self._odom[key]
-        if n < self._odom_buf_size:
-            return buf[:n].copy()
-        idx = self._odom_idx  # oldest entry
-        return np.concatenate([buf[idx:], buf[:idx]])
-
-    @staticmethod
-    def _bresenham(img, x0, y0, x1, y1, color):
-        """Draw a 1-px line on an RGB image (Bresenham)."""
-        h, w = img.shape[:2]
-        dx = abs(x1 - x0)
-        dy = abs(y1 - y0)
-        sx = 1 if x0 < x1 else -1
-        sy = 1 if y0 < y1 else -1
-        err = dx - dy
-        while True:
-            if 0 <= y0 < h and 0 <= x0 < w:
-                img[y0, x0] = color
-            # also fill ±1 for ~2 px thickness
-            for off in (-1, 1):
-                yy = y0 + off
-                if 0 <= yy < h and 0 <= x0 < w:
-                    img[yy, x0] = color
-            if x0 == x1 and y0 == y1:
-                break
-            e2 = 2 * err
-            if e2 > -dy:
-                err -= dy
-                x0 += sx
-            if e2 < dx:
-                err += dx
-                y0 += sy
-
-    def _draw_mini_graph(
-        self,
-        panel: np.ndarray,
-        x0: int,
-        y0: int,
-        gw: int,
-        gh: int,
-        traces: list[tuple[np.ndarray, tuple[int, int, int]]],
-        title: str,
-        y_range: tuple[float, float] | None = None,
-        ref_lines: list[tuple[float, tuple[int, int, int]]] | None = None,
-    ) -> None:
-        """Draw a mini line graph within *panel* at (x0, y0) of size gw×gh.
-
-        *traces*: list of (data_array, RGB_color)
-        *ref_lines*: optional list of (y_value, RGB_color) for horizontal refs.
-        """
-        margin_top = 14  # space for title
-        margin_bot = 2
-        plot_y0 = y0 + margin_top
-        plot_h = gh - margin_top - margin_bot
-        if plot_h < 10 or gw < 20:
-            return
-
-        # Determine Y range
-        if y_range is not None:
-            ymin, ymax = y_range
-        else:
-            all_vals = np.concatenate([t[0] for t in traces])
-            if len(all_vals) == 0:
-                return
-            ymin = float(np.nanmin(all_vals))
-            ymax = float(np.nanmax(all_vals))
-        if abs(ymax - ymin) < 1e-6:
-            ymax = ymin + 1.0
-
-        # Background
-        panel[y0:y0 + gh, x0:x0 + gw] = (28, 28, 32)
-
-        # Horizontal grid (4 lines)
-        for gi in range(1, 4):
-            gy = plot_y0 + int(plot_h * gi / 4)
-            panel[gy, x0 + 2:x0 + gw - 2] = (48, 48, 52)
-
-        # Zero line if in range
-        if ymin < 0 < ymax:
-            zy = plot_y0 + int(plot_h * (1.0 - (0.0 - ymin) / (ymax - ymin)))
-            if plot_y0 <= zy < plot_y0 + plot_h:
-                panel[zy, x0 + 2:x0 + gw - 2] = (70, 70, 55)
-
-        # Reference lines (e.g. goal altitude, threshold)
-        if ref_lines:
-            for ref_val, ref_col in ref_lines:
-                if ymin <= ref_val <= ymax:
-                    ry = plot_y0 + int(plot_h * (1.0 - (ref_val - ymin) / (ymax - ymin)))
-                    ry = max(plot_y0, min(plot_y0 + plot_h - 1, ry))
-                    # Dashed line
-                    for rx in range(x0 + 2, x0 + gw - 2, 4):
-                        if rx + 2 < x0 + gw - 2:
-                            panel[ry, rx:rx + 2] = ref_col
-
-        # Data traces
-        for data, color in traces:
-            n = len(data)
-            if n < 2:
-                continue
-            xs = np.linspace(x0 + 2, x0 + gw - 3, n).astype(int)
-            normed = (data - ymin) / (ymax - ymin)
-            normed = np.clip(normed, 0.0, 1.0)
-            ys = (plot_y0 + plot_h - 1 - normed * (plot_h - 1)).astype(int)
-            ys = np.clip(ys, plot_y0, plot_y0 + plot_h - 1)
-            for j in range(n - 1):
-                self._bresenham(panel, int(xs[j]), int(ys[j]),
-                                int(xs[j + 1]), int(ys[j + 1]), color)
-
-        # Title
-        self._burn_text_lines(panel, [title], x=x0 + 4, y=y0 + 2,
-                              scale=1, color=(180, 190, 200), line_height=12)
-        # Y-axis range labels
-        self._burn_text_lines(
-            panel, [f"{ymax:.1f}"], x=x0 + gw - 40, y=y0 + 2,
-            scale=1, color=(110, 110, 110), line_height=12,
-        )
-        self._burn_text_lines(
-            panel, [f"{ymin:.1f}"], x=x0 + gw - 40, y=y0 + gh - 12,
-            scale=1, color=(110, 110, 110), line_height=12,
-        )
+        top_row = np.concatenate([frames[0], frames[1]], axis=1)
+        metrics_panel = self._draw_metrics_overlay(frames[3].shape)
+        bottom_row = np.concatenate([frames[2], metrics_panel], axis=1)
+        return np.concatenate([top_row, bottom_row], axis=0)
 
     def _draw_metrics_overlay(self, shape: tuple) -> np.ndarray:
         h, w = shape[0], shape[1]
-        # Subtle gradient background (dark charcoal)
-        panel = np.zeros((h, w, 3), dtype=np.uint8)
-        for row in range(h):
-            t = row / max(h - 1, 1)
-            panel[row, :] = (int(16 + 8 * t), int(17 + 6 * t), int(20 + 5 * t))
+        panel = np.full((h, w, 3), 20, dtype=np.uint8)
         info = self._last_info
+        if not info:
+            return panel
 
-        # ---- Compact text metrics (top portion) ----
-        if info:
-            soc = info.get('battery_soc', 1.0) * 100
-            lines = [
-                f"Step {self.step_id:>5d}/{self.time_limit}"
-                f"  Goals {info.get('goals_reached', 0)}"
-                f"  Batt {soc:>4.0f}%",
-                f"Dist {info.get('pos_error', 0.0):>6.3f}m"
-                f"  Tilt {info.get('tilt_deg', 0.0):>5.1f}d"
-                f"  Spd {info.get('lin_speed', 0.0):>5.2f}m/s",
-                f"Motor {info.get('motor_omega_mean', 0.0):>5.0f}r/s"
-                f"  GE {info.get('ground_effect_mean', 1.0):>5.3f}"
-                f"  Wind {info.get('disturbance_norm', 0.0):>5.3f}N",
-                f"Reward {self._last_reward:>+6.3f}"
-                f"  Hold {info.get('reach_hold_steps', 0)}"
-                f"/{info.get('reach_hold_required', 0)}",
-            ]
-            status = ""
-            status_color = (220, 230, 240)
-            if info.get("goal_just_reached"):
-                status = ">> GOAL REACHED <<"
-                status_color = (100, 255, 120)
-            elif info.get("crashed"):
-                status = ">> CRASHED <<"
-                status_color = (100, 100, 255)
-            elif info.get("excessive_tilt"):
-                status = ">> TILT FAIL <<"
-                status_color = (80, 130, 255)
-            elif info.get("out_of_bounds"):
-                status = ">> OOB <<"
-                status_color = (80, 180, 255)
-            elif info.get("battery_depleted"):
-                status = ">> BATTERY <<"
-                status_color = (50, 200, 255)
-            if status:
-                lines.append(status)
+        lines = [
+            f"Step: {self.step_id:>5d} / {self.time_limit}",
+            f"Goals:    {info.get('goals_reached', 0):>3d}",
+            f"Pos err:  {info.get('pos_error', 0.0):>7.3f} m",
+            f"Tilt:     {info.get('tilt_deg', 0.0):>7.1f} deg",
+            f"Lin spd:  {info.get('lin_speed', 0.0):>7.3f} m/s",
+            f"Ang spd:  {info.get('ang_speed', 0.0):>7.3f} rad/s",
+            f"Battery:  {info.get('battery_soc', 1.0) * 100:>6.1f} %",
+            f"Motor avg:{info.get('motor_omega_mean', 0.0):>7.0f} rad/s",
+            f"GE mult:  {info.get('ground_effect_mean', 1.0):>7.3f}",
+            f"Wind:     {info.get('disturbance_norm', 0.0):>7.4f} N",
+            f"Reward:   {self._last_reward:>+7.3f}",
+            f"Hold:     {info.get('reach_hold_steps', 0):>3d}"
+            f" / {info.get('reach_hold_required', 0)}",
+        ]
+        if info.get("goal_just_reached"):
+            lines.append("  >> GOAL REACHED <<")
+        elif info.get("crashed"):
+            lines.append("  >> CRASHED <<")
+        elif info.get("excessive_tilt"):
+            lines.append("  >> TILT FAIL <<")
+        elif info.get("out_of_bounds"):
+            lines.append("  >> OOB <<")
+        elif info.get("battery_depleted"):
+            lines.append("  >> BATTERY <<")
 
-            self._burn_text_lines(panel, lines, x=8, y=28, scale=1,
-                                  color=(220, 230, 240), line_height=16)
-            if status:
-                # Re-burn the status line in its colour
-                sy = 28 + 16 * (len(lines) - 1)
-                self._burn_text_lines(panel, [status], x=8, y=sy,
-                                      scale=1, color=status_color,
-                                      line_height=16)
-        else:
-            self._burn_text_lines(panel, ["Waiting..."], x=8, y=28,
-                                  scale=1, line_height=16)
-
-        # ---- Odometry graphs (bottom portion) ----
-        text_h = 113  # space used by label bar + text above
-        graph_margin = 4
-        n_graphs = 4
-        avail_h = h - text_h - graph_margin
-        gh = max(50, avail_h // n_graphs - graph_margin)
-        gw = w - 16
-        gx = 8
-
-        # Fetch ordered history
-        alt = self._odom_ordered("alt")
-        goal_z = self._odom_ordered("goal_z")
-        dist = self._odom_ordered("dist")
-        roll = self._odom_ordered("roll")
-        pitch = self._odom_ordered("pitch")
-        yaw = self._odom_ordered("yaw")
-        m1 = self._odom_ordered("m1")
-        m2 = self._odom_ordered("m2")
-        m3 = self._odom_ordered("m3")
-        m4 = self._odom_ordered("m4")
-
-        gy = text_h
-
-        # Graph 1: Altitude + goal Z
-        alt_min = min(0.0, float(np.min(alt)), float(np.min(goal_z)))
-        alt_max = max(0.8, float(np.max(alt)) + 0.05, float(np.max(goal_z)) + 0.05)
-        self._draw_mini_graph(
-            panel, gx, gy, gw, gh,
-            traces=[
-                (alt,    (80, 180, 255)),   # blue – actual altitude
-                (goal_z, (80, 255, 120)),   # green – goal Z
-            ],
-            title="Alt (blue) / Goal Z (grn)",
-            y_range=(alt_min, alt_max),
-        )
-        gy += gh + graph_margin
-
-        # Graph 2: Distance to goal
-        d_max = max(0.3, float(np.max(dist)) + 0.02)
-        self._draw_mini_graph(
-            panel, gx, gy, gw, gh,
-            traces=[(dist, (255, 160, 60))],  # orange
-            title="Dist to Goal (m)",
-            y_range=(0.0, d_max),
-            ref_lines=[(self.reach_threshold, (80, 255, 120))],  # threshold
-        )
-        gy += gh + graph_margin
-
-        # Graph 3: Roll / Pitch / Yaw
-        rpy_min = min(-15.0, float(np.min(roll)), float(np.min(pitch)))
-        rpy_max = max(15.0, float(np.max(roll)), float(np.max(pitch)))
-        rpy_abs = max(abs(rpy_min), abs(rpy_max), 10.0)
-        self._draw_mini_graph(
-            panel, gx, gy, gw, gh,
-            traces=[
-                (roll,  (255, 100, 100)),   # red
-                (pitch, (100, 180, 255)),   # blue
-                (yaw,   (200, 200, 100)),   # yellow
-            ],
-            title="R(red) P(blu) Y(yel) deg",
-            y_range=(-rpy_abs, rpy_abs),
-        )
-        gy += gh + graph_margin
-
-        # Graph 4: Motor speeds (normalised 0-1)
-        self._draw_mini_graph(
-            panel, gx, gy, gw, gh,
-            traces=[
-                (m1, (255, 120, 120)),   # red-ish
-                (m2, (120, 200, 255)),   # cyan-ish
-                (m3, (120, 255, 140)),   # green-ish
-                (m4, (255, 220, 100)),   # yellow-ish
-            ],
-            title="Motors 1-4 (norm)",
-            y_range=(0.0, 1.05),
-        )
-
+        self._burn_text_lines(panel, lines, x=10, y=14, scale=1)
         return panel
 
     @staticmethod

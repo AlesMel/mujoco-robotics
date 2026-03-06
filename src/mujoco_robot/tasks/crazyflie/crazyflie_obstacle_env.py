@@ -295,13 +295,9 @@ class CrazyflieObstacleEnv(CrazyflieReachEnv):
         else:
             self._fixed_maze_walls = None
 
-        # ---- FPV + side + top cameras (3 renderers) ---------------------
-        rw, rh = self.render_size
+        # ---- FPV + side + top cameras (created lazily on first render()) ---
         self._camera_names = ["cf_fpv", "cf_side", "cf_top"]
-        self._renderers = [
-            mujoco.Renderer(self.model, height=rh, width=rw)
-            for _ in self._camera_names
-        ]
+        self._renderers = []  # allocated lazily on first render() call
 
     # ==================================================================
     #  XML injection
@@ -504,10 +500,15 @@ class CrazyflieObstacleEnv(CrazyflieReachEnv):
                 or (g2 in self._drone_geom_ids and g1 in self._wall_geom_ids)
             ):
                 return True
-        # 2) Proximity fallback — horizontal rays only (exclude up/down)
+        # 2) Proximity fallback — horizontal rays only (exclude vertical rays)
         if hasattr(self, "_cached_rangefinder") and self._cached_rangefinder is not None:
             rf = self._cached_rangefinder
-            n_horiz = len(rf) - 2  # last two are up/down
+            # multi_ranger: [front, back, left, right, up] — 1 vertical at end
+            # lidar:        [h0..hN-1, up, down]            — 2 verticals at end
+            if self._rangefinder_mode == "multi_ranger":
+                n_horiz = len(rf) - 1
+            else:
+                n_horiz = len(rf) - 2
             if n_horiz > 0:
                 proximity_threshold = 0.02 / self._rangefinder_max_range  # 2 cm
                 if float(np.min(rf[:n_horiz])) < proximity_threshold:
@@ -921,20 +922,36 @@ class CrazyflieObstacleEnv(CrazyflieReachEnv):
             vel_toward_goal = float(np.dot(lin_vel_world, goal_dir))
         else:
             vel_toward_goal = 0.0
-        if dist > 0.01 and lin_speed > 0.01:
-            alignment = vel_toward_goal / lin_speed
-            R_direction = max(0.0, alignment)
+        if dist > 0.01:
+            # tanh gives a smooth signal in [-1, 1] regardless of speed,
+            # rewarding any drift toward goal and penalising moving away.
+            R_direction = float(np.tanh(vel_toward_goal / 0.3))
         else:
             R_direction = 0.0
 
-        # Exponential approach bonus: +0.8 at goal, ~0.11 at 0.5 m
+        # Exponential approach bonus: +0.8 at goal, ~0.11 at 0.5 m.
+        # NOT gated by obstacle clearance — obstacle avoidance is handled by
+        # R_obstacle separately; gating here suppresses the goal gradient
+        # whenever any wall is nearby, which kills progressive learning.
         R_approach = 0.8 * math.exp(-pos_error / 0.25)
 
-        R_progress = 0.5 * R_distance + 0.2 * R_direction + 0.3 * R_approach
+        # Near-goal holding bonus (mirrors crazyflie_reach_env)
+        R_near_goal = 0.08 if near_goal else 0.0
+
+        # Alive bonus: small constant survival signal so stable hover is
+        # always positive, even in the presence of energy/stability penalties.
+        R_alive = 0.05
+
+        R_progress = (
+            0.4 * R_distance
+            + 0.2 * R_direction
+            + 0.2 * R_approach
+            + 0.1 * R_near_goal
+            + 0.1 * R_alive
+        )
 
         # ==================== 2. R_obstacle  (range ~ [-1, 0]) ============
-        rf = self._compute_rangefinder()
-        self._cached_rangefinder = rf.copy()
+        # rf is already computed above (line 887) and cached; reuse it.
         min_rf_norm = float(np.min(rf))
         min_range_m = min_rf_norm * self._rangefinder_max_range
 
@@ -946,20 +963,24 @@ class CrazyflieObstacleEnv(CrazyflieReachEnv):
         dz = self._obstacle_danger_zone      # e.g. 0.30
         wz = self._obstacle_warning_zone     # e.g. 0.60
 
-        worst_penalty = 0.0
-        for i in range(len(rf)):
-            d = float(rf[i])  # normalised [0, 1]
-            if d < cz:
-                p = -1.0
-            elif d < dz:
-                p = -0.5 * math.exp(-3.0 * (d - cz) / max(dz - cz, 1e-6))
-            elif d < wz:
-                p = -0.1 * (wz - d) / max(wz - dz, 1e-6)
-            else:
-                p = 0.0
-            worst_penalty = min(worst_penalty, p)
-
-        R_obstacle_val = worst_penalty  # only the closest obstacle matters
+        # Vectorised zone penalties — avoids a Python loop over all rays.
+        in_cz = rf < cz
+        in_dz = (~in_cz) & (rf < dz)
+        in_wz = (~in_cz) & (~in_dz) & (rf < wz)
+        penalties = np.zeros(len(rf), dtype=np.float32)
+        penalties[in_cz] = -1.0
+        if in_dz.any():
+            penalties[in_dz] = -0.5 * np.exp(
+                -3.0 * (rf[in_dz] - cz) / max(dz - cz, 1e-6)
+            )
+        if in_wz.any():
+            penalties[in_wz] = -0.1 * (wz - rf[in_wz]) / max(wz - dz, 1e-6)
+        mean_penalty = float(np.mean(penalties))
+        worst_penalty = float(penalties.min())
+        # Blend worst ray (60%) with mean penalty (40%) so the agent gets a
+        # graded signal: a single wall ray doesn't wipe out the progress signal
+        # while the closest obstacle still dominates.
+        R_obstacle_val = 0.6 * worst_penalty + 0.4 * mean_penalty
 
         # ==================== 3. R_energy  (range ~ [-1, 0]) ==============
         rotor_norm = self._last_motor_cmd_norm
@@ -1071,6 +1092,8 @@ class CrazyflieObstacleEnv(CrazyflieReachEnv):
             "R_task": float(R_task),
             "progress": float(R_distance),
             "R_direction": float(R_direction),
+            "R_approach": float(R_approach),
+            "R_near_goal": float(R_near_goal),
             "speed_match": float(R_direction),  # legacy alias for eval HUD
             "stability_factor": float(np.clip(1.0 + R_stability, 0.0, 1.0)),
             "vel_toward_goal": float(vel_toward_goal),
@@ -1089,6 +1112,11 @@ class CrazyflieObstacleEnv(CrazyflieReachEnv):
             raise ValueError("mode must be 'human' or 'rgb_array'")
 
         rw, rh = self.render_size
+        if not self._renderers:
+            self._renderers = [
+                mujoco.Renderer(self.model, height=rh, width=rw)
+                for _ in self._camera_names
+            ]
 
         # Pre-compute lidar hit points for visualisation
         drone_pos = self.data.xpos[self.cf_body_id].copy()
@@ -1181,12 +1209,18 @@ class CrazyflieObstacleEnv(CrazyflieReachEnv):
 
         return composite
 
+    # ------------------------------------------------------------------
+    def _add_panel_label(self, panel: np.ndarray, text: str) -> None:
+        """Burn a small title label into the top-left of a panel image."""
+        self._burn_text_lines(panel, [text], x=6, y=4, scale=1,
+                              color=(200, 210, 220), line_height=18)
+
     # ==================================================================
     #  Minimap override (show walls as rectangles)
     # ==================================================================
     def _draw_minimap(self, shape: tuple) -> np.ndarray:
-        panel = super()._draw_minimap(shape)
         h, w = shape
+        panel = np.full((h, w, 3), 25, dtype=np.uint8)
 
         # Re-derive the coordinate mapping (same constants as parent)
         label_h = 24

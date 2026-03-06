@@ -277,12 +277,7 @@ class CrazyflieHoverEnv:
         self._drone_geom_ids = self._collect_drone_geom_ids()
 
         self._camera_names = ["cf_chase", "cf_top", "cf_side", "cf_closeup"]
-
-        rw, rh = self.render_size
-        self._renderers = [
-            mujoco.Renderer(self.model, height=rh, width=rw)
-            for _ in self._camera_names
-        ]
+        self._renderers = []  # created lazily on first render() call
 
         self.step_id = 0
         self._goal_pos = np.zeros(3, dtype=float)
@@ -757,6 +752,13 @@ class CrazyflieHoverEnv:
             return None
         if mode != "rgb_array":
             raise ValueError("mode must be 'human' or 'rgb_array'")
+
+        if not self._renderers:
+            rw, rh = self.render_size
+            self._renderers = [
+                mujoco.Renderer(self.model, height=rh, width=rw)
+                for _ in self._camera_names
+            ]
 
         frames = []
         for renderer, cam_name in zip(self._renderers, self._camera_names):

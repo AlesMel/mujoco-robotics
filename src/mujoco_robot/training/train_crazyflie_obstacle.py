@@ -25,11 +25,11 @@ from mujoco_robot.training.callbacks import (
 )
 
 
-DEFAULT_CFG_NAME = "crazyflie_obstacle_dense_stable"
+DEFAULT_CFG_NAME = "crazyflie_obstacle_skrl_stable"
 
 
 def train_crazyflie_obstacle_ppo(
-    total_timesteps: int = 10_000_000,
+    total_timesteps: int = 50_000_000,
     n_envs: int = 32,
     log_dir: str = "runs",
     log_name: str = "crazyflie_obstacle_ppo",
@@ -90,7 +90,7 @@ def train_crazyflie_obstacle_ppo(
         vec_env = DummyVecEnv([make_env(0)])
     else:
         vec_env = SubprocVecEnv([make_env(i) for i in range(n_envs)])
-    vec_env = VecNormalize(vec_env, norm_obs=True, norm_reward=False, clip_obs=10.0)
+    vec_env = VecNormalize(vec_env, norm_obs=True, norm_reward=True, clip_obs=10.0)
     n_steps = 2048
 
     env_name = f"crazyflie_obstacle_{cfg_name}".replace("/", "_")
@@ -136,11 +136,11 @@ def train_crazyflie_obstacle_ppo(
         learning_rate=lr_schedule,
         gamma=0.99,
         gae_lambda=0.95,
-        ent_coef=0.005,
+        ent_coef=0.003,
         clip_range=0.2,
-        vf_coef=0.5,
+        vf_coef=1.0,
         max_grad_norm=0.5,
-        device="cpu",
+        device="cuda",
         policy_kwargs=dict(
             net_arch=dict(pi=[256, 256, 128], vf=[256, 256, 128]),
             activation_fn=nn.Tanh,

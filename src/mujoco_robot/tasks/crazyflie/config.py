@@ -152,7 +152,7 @@ def make_crazyflie_obstacle_dense_stable_cfg() -> CrazyflieTaskConfig:
             "rangefinder_max_range": 1.0,
             "rangefinder_noise_std": 0.02,
             # -- reward weights --
-            "w_progress": 5.0,
+            "w_progress": 4.0,
             "w_obstacle": 0.5,
             "w_energy": 0.2,
             "w_stability": 0.3,
@@ -173,6 +173,129 @@ def make_crazyflie_obstacle_dense_stable_cfg() -> CrazyflieTaskConfig:
     )
 
 
+def make_crazyflie_obstacle_skrl_stable_cfg() -> CrazyflieTaskConfig:
+    """Balanced reward profile for SKRL PPO wall-maze training.
+
+    Compared with ``crazyflie_obstacle_dense_stable``:
+
+    * ``w_progress`` reduced 5 → 3 so the agent does not rush into walls.
+    * ``w_obstacle`` raised 0.5 → 1.5 for a stronger obstacle-avoidance signal.
+    * ``w_stability`` raised 0.3 → 0.5 — a stable hover baseline helps navigation.
+    * ``collision_penalty`` raised 20 → 30 — clearer hard-stop signal.
+    * Danger/warning zones widened for earlier penalty activation.
+    """
+    return CrazyflieTaskConfig(
+        model_path=_DEFAULT_MODEL,
+        actuator_profile="crazyflie",
+        time_limit=1200,
+        env_kwargs={
+            "observation_mode": "state_estimate",
+            "n_substeps": 10,
+            "disturbance_sigma": 0.03,
+            "actuator_noise_std": 0.015,
+            "sensor_noise_scale": 1.0,
+            "goal_xy_range": 0.55,
+            "goal_z_range": (0.20, 0.65),
+            "reach_threshold": 0.06,
+            "reach_hold_steps": 15,
+            # -- wall-maze layout --
+            "n_wall_slots": 12,
+            "n_barriers": (2, 3),
+            "gap_width": 0.22,
+            "partial_wall_prob": 0.30,
+            "wall_spawn_clearance": 0.20,
+            "fixed_layout": False,
+            "ceiling_height": 0.75,
+            "terminate_on_goal": False,
+            # -- rangefinder --
+            "rangefinder_mode": "lidar",
+            "n_lidar_rays": 16,
+            "rangefinder_max_range": 1.0,
+            "rangefinder_noise_std": 0.02,
+            # -- reward weights (rebalanced for SKRL) --
+            "w_progress": 4.0,
+            "w_obstacle": 1.0,
+            "w_energy": 0.2,
+            "w_stability": 0.3,
+            "w_task": 1.0,
+            # -- reward thresholds --
+            "goal_bonus": 10.0,
+            "time_bonus_max": 5.0,
+            "collision_penalty": 30.0,
+            "timeout_penalty": 5.0,
+            "v_optimal": 0.5,
+            "v_max": 2.0,
+            "a_max": 15.0,
+            # -- obstacle zones (wider for earlier penalty activation) --
+            "obstacle_collision_zone": 0.08,
+            "obstacle_danger_zone": 0.30,
+            "obstacle_warning_zone": 0.60,
+        },
+    )
+
+
+def make_crazyflie_obstacle_fast_cfg() -> CrazyflieTaskConfig:
+    """Fast iteration profile — halved substeps and lidar rays.
+
+    Use when compute budget is tight or for rapid hyper-parameter search.
+    Physics fidelity is slightly reduced but remains suitable for RL training:
+
+    * ``n_substeps`` 10 → 5   — same 100 Hz control rate; fewer 1 ms sub-steps
+      per decision.  Error over the 5 ms window is negligible.
+    * ``n_lidar_rays`` 16 → 8 — observation shrinks to 36 dims (vs 45).
+      8 rays at 45° spacing still give adequate obstacle coverage.
+
+    Reward weights match ``crazyflie_obstacle_skrl_stable``.
+    """
+    return CrazyflieTaskConfig(
+        model_path=_DEFAULT_MODEL,
+        actuator_profile="crazyflie",
+        time_limit=1200,
+        env_kwargs={
+            "observation_mode": "state_estimate",
+            "n_substeps": 5,
+            "disturbance_sigma": 0.03,
+            "actuator_noise_std": 0.015,
+            "sensor_noise_scale": 1.0,
+            "goal_xy_range": 0.55,
+            "goal_z_range": (0.20, 0.65),
+            "reach_threshold": 0.06,
+            "reach_hold_steps": 15,
+            # -- wall-maze layout --
+            "n_wall_slots": 12,
+            "n_barriers": (2, 3),
+            "gap_width": 0.22,
+            "partial_wall_prob": 0.30,
+            "wall_spawn_clearance": 0.20,
+            "fixed_layout": False,
+            "ceiling_height": 0.75,
+            "terminate_on_goal": False,
+            # -- rangefinder (8 rays instead of 16) --
+            "rangefinder_mode": "lidar",
+            "n_lidar_rays": 8,
+            "rangefinder_max_range": 1.0,
+            "rangefinder_noise_std": 0.02,
+            # -- reward weights (same as skrl_stable) --
+            "w_progress": 4.0,
+            "w_obstacle": 1.0,
+            "w_energy": 0.2,
+            "w_stability": 0.3,
+            "w_task": 1.0,
+            # -- reward thresholds --
+            "goal_bonus": 10.0,
+            "time_bonus_max": 5.0,
+            "collision_penalty": 30.0,
+            "timeout_penalty": 5.0,
+            "v_optimal": 0.5,
+            "v_max": 2.0,
+            "a_max": 15.0,
+            "obstacle_collision_zone": 0.08,
+            "obstacle_danger_zone": 0.30,
+            "obstacle_warning_zone": 0.60,
+        },
+    )
+
+
 _CFG_FACTORIES: dict[str, Callable[[], CrazyflieTaskConfig]] = {
     "crazyflie_hover": make_crazyflie_hover_cfg,
     "crazyflie_hover_dense_stable": make_crazyflie_hover_dense_stable_cfg,
@@ -181,6 +304,8 @@ _CFG_FACTORIES: dict[str, Callable[[], CrazyflieTaskConfig]] = {
     "crazyflie_reach_dense_stable": make_crazyflie_reach_dense_stable_cfg,
     "crazyflie_obstacle": make_crazyflie_obstacle_cfg,
     "crazyflie_obstacle_dense_stable": make_crazyflie_obstacle_dense_stable_cfg,
+    "crazyflie_obstacle_skrl_stable": make_crazyflie_obstacle_skrl_stable_cfg,
+    "crazyflie_obstacle_fast": make_crazyflie_obstacle_fast_cfg,
 }
 
 
