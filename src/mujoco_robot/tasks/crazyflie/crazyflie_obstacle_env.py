@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import math
 import xml.etree.ElementTree as ET
-from typing import Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import gymnasium
 import mujoco
@@ -194,6 +194,8 @@ class CrazyflieObstacleEnv(CrazyflieReachEnv):
         obstacle_collision_zone: float = 0.08,
         obstacle_danger_zone: float = 0.25,
         obstacle_warning_zone: float = 0.50,
+        # ---- structured goal pool ----
+        goal_pool: Optional[List[Tuple[float, float, float]]] = None,
         **kwargs,
     ) -> None:
         # ---- Store BEFORE super().__init__ (which calls _load_model_xml) --
@@ -229,6 +231,18 @@ class CrazyflieObstacleEnv(CrazyflieReachEnv):
         self._obstacle_collision_zone = float(max(0, obstacle_collision_zone))
         self._obstacle_danger_zone = float(max(obstacle_collision_zone, obstacle_danger_zone))
         self._obstacle_warning_zone = float(max(obstacle_danger_zone, obstacle_warning_zone))
+
+        # ---- Structured goal pool ----
+        # When set, goals cycle through the pool (shuffled each episode)
+        # instead of being sampled randomly.
+        if goal_pool is not None:
+            self._goal_pool: Optional[np.ndarray] = np.array(
+                goal_pool, dtype=np.float64
+            )
+        else:
+            self._goal_pool = None
+        self._goal_pool_shuffled: Optional[np.ndarray] = None
+        self._goal_pool_idx: int = 0
 
         # ---- Build model via parent (calls overridden _load_model_xml) ----
         super().__init__(**kwargs)
@@ -809,9 +823,18 @@ class CrazyflieObstacleEnv(CrazyflieReachEnv):
         super().reset(seed=seed)
         # Place walls (needs goal_pos from parent reset)
         self._reset_obstacles()
-        # For random layouts, resample the goal *after* maze generation so
-        # "goal behind barrier" sampling is consistent with this episode's maze.
-        if not self._fixed_layout:
+        # Goal assignment priority:
+        #   1. Structured pool (shuffled each episode) — overrides everything.
+        #   2. Random barrier-aware sampling for random layouts.
+        #   3. Goal already set by parent reset (fixed_layout=True).
+        if self._goal_pool is not None:
+            shuffled = self._goal_pool.copy()
+            self._rng.shuffle(shuffled)
+            self._goal_pool_shuffled = shuffled
+            self._goal_pool_idx = 0
+            self._goal_pos = shuffled[0].copy()
+            self._update_goal_marker()
+        elif not self._fixed_layout:
             self._goal_pos = self._sample_goal()
             self._update_goal_marker()
         mujoco.mj_forward(self.model, self.data)
@@ -878,7 +901,15 @@ class CrazyflieObstacleEnv(CrazyflieReachEnv):
             self._goals_reached += 1
             self._reach_hold_counter = 0
             if not self._terminate_on_goal:
-                self._goal_pos = self._sample_goal()
+                if self._goal_pool_shuffled is not None:
+                    self._goal_pool_idx = (
+                        (self._goal_pool_idx + 1) % len(self._goal_pool_shuffled)
+                    )
+                    self._goal_pos = self._goal_pool_shuffled[
+                        self._goal_pool_idx
+                    ].copy()
+                else:
+                    self._goal_pos = self._sample_goal()
                 self._update_goal_marker()
                 self._prev_distance = float(
                     np.linalg.norm(self._goal_pos - pos)
@@ -1084,6 +1115,8 @@ class CrazyflieObstacleEnv(CrazyflieReachEnv):
             "rangefinder_min_norm": min_rf_norm,
             "n_active_walls": self._n_active_walls,
             "n_active_obstacles": self._n_active_walls,  # legacy alias
+            "goal_pool_idx": int(self._goal_pool_idx),
+            "goal_pool_size": int(len(self._goal_pool_shuffled)) if self._goal_pool_shuffled is not None else 0,
             # Reward components
             "R_progress": float(R_progress),
             "R_obstacle": float(R_obstacle_val),

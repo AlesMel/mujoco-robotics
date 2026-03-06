@@ -10,6 +10,23 @@ _DEFAULT_MODEL = str(
     Path(__file__).resolve().parent.parent.parent / "assets" / "crazyflie_2_1.xml"
 )
 
+# Structured goal pool for obstacle environments.
+# Goals are spread across all quadrants and altitudes to ensure the agent
+# trains on a variety of navigation scenarios (left/right turns, diagonal
+# crossings, fly-over, fly-under).  Pool is shuffled each episode.
+# Workspace: xy in [-0.55, 0.55], z in [0.20, 0.65].
+OBSTACLE_GOAL_POOL = [
+    (-0.45,  0.00, 0.40),   # cross left barrier, mid height
+    ( 0.45,  0.00, 0.40),   # cross right barrier, mid height
+    ( 0.00,  0.45, 0.55),   # cross top barrier, fly high (over)
+    ( 0.00,  0.45, 0.22),   # cross top barrier, fly low (under)
+    ( 0.00, -0.45, 0.40),   # cross bottom barrier, mid height
+    (-0.40,  0.40, 0.50),   # diagonal left-top, high
+    ( 0.40,  0.40, 0.22),   # diagonal right-top, low
+    (-0.40, -0.40, 0.35),   # diagonal left-bottom, mid
+    ( 0.40, -0.40, 0.55),   # diagonal right-bottom, high
+]
+
 
 @dataclass
 class CrazyflieTaskConfig:
@@ -169,6 +186,8 @@ def make_crazyflie_obstacle_dense_stable_cfg() -> CrazyflieTaskConfig:
             "obstacle_collision_zone": 0.08,
             "obstacle_danger_zone": 0.25,
             "obstacle_warning_zone": 0.50,
+            # -- structured goal pool --
+            "goal_pool": OBSTACLE_GOAL_POOL,
         },
     )
 
@@ -230,6 +249,8 @@ def make_crazyflie_obstacle_skrl_stable_cfg() -> CrazyflieTaskConfig:
             "obstacle_collision_zone": 0.08,
             "obstacle_danger_zone": 0.30,
             "obstacle_warning_zone": 0.60,
+            # -- structured goal pool --
+            "goal_pool": OBSTACLE_GOAL_POOL,
         },
     )
 
@@ -292,6 +313,8 @@ def make_crazyflie_obstacle_fast_cfg() -> CrazyflieTaskConfig:
             "obstacle_collision_zone": 0.08,
             "obstacle_danger_zone": 0.30,
             "obstacle_warning_zone": 0.60,
+            # -- structured goal pool --
+            "goal_pool": OBSTACLE_GOAL_POOL,
         },
     )
 
