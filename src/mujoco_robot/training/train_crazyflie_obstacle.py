@@ -1,4 +1,4 @@
-"""Train PPO on the Crazyflie obstacle-avoidance reach task.
+"""Train PPO on the Crazyflie wall-maze obstacle-avoidance reach task.
 
 Usage::
 
@@ -34,7 +34,7 @@ def train_crazyflie_obstacle_ppo(
     log_dir: str = "runs",
     log_name: str = "crazyflie_obstacle_ppo",
     save_video: bool = True,
-    save_video_every: int = 1_000_000,
+    save_video_every: int = 2_000_000,
     progress_bar: bool = True,
     sb3_verbose: int = 0,
     callback_new_best_only: bool = True,
@@ -58,13 +58,23 @@ def train_crazyflie_obstacle_ppo(
     train_render_mode = "human" if realtime_render else None
 
     print(f"\n{'='*58}")
-    print("  Crazyflie OBSTACLE-AVOIDANCE training config")
+    print("  Crazyflie WALL-MAZE training config")
     print(f"  Config profile:   {cfg_name}")
     print(f"  Time limit:       {preview_cfg.time_limit}")
     print(f"  Obs mode:         {preview_cfg.env_kwargs.get('observation_mode', 'state_estimate')}")
     print(f"  Rangefinder:      {preview_cfg.env_kwargs.get('rangefinder_mode', 'lidar')}")
     print(f"  Lidar rays:       {preview_cfg.env_kwargs.get('n_lidar_rays', 16)}")
-    print(f"  Obstacles:        {preview_cfg.env_kwargs.get('n_obstacles_range', (3, 8))}")
+    print(f"  Barriers:         {preview_cfg.env_kwargs.get('n_barriers', (2, 3))}")
+    print(f"  Gap width:        {preview_cfg.env_kwargs.get('gap_width', 0.22)}")
+    print(f"  Partial wall %:   {preview_cfg.env_kwargs.get('partial_wall_prob', 0.30)}")
+    print(f"  Collision pen.:   {preview_cfg.env_kwargs.get('collision_penalty', 10.0)}")
+    print(f"  Goal bonus:       {preview_cfg.env_kwargs.get('goal_bonus', 10.0)}")
+    print(f"  Weights (P/O/E/S/T): "
+          f"{preview_cfg.env_kwargs.get('w_progress', 5.0)}/"
+          f"{preview_cfg.env_kwargs.get('w_obstacle', 0.5)}/"
+          f"{preview_cfg.env_kwargs.get('w_energy', 0.2)}/"
+          f"{preview_cfg.env_kwargs.get('w_stability', 0.3)}/"
+          f"{preview_cfg.env_kwargs.get('w_task', 1.0)}")
     print(f"  Realtime render:  {realtime_render}")
     print(f"  Progress bar:     {progress_bar}")
     print(f"  Total timesteps:  {total_timesteps:,}")
@@ -80,7 +90,8 @@ def train_crazyflie_obstacle_ppo(
         vec_env = DummyVecEnv([make_env(0)])
     else:
         vec_env = SubprocVecEnv([make_env(i) for i in range(n_envs)])
-    vec_env = VecNormalize(vec_env, norm_obs=True, norm_reward=True, clip_obs=10.0)
+    vec_env = VecNormalize(vec_env, norm_obs=True, norm_reward=False, clip_obs=10.0)
+    n_steps = 2048
 
     env_name = f"crazyflie_obstacle_{cfg_name}".replace("/", "_")
     callbacks = [
@@ -109,26 +120,29 @@ def train_crazyflie_obstacle_ppo(
         callbacks.append(video_cb)
 
     # Larger network for obstacle avoidance (rangefinder obs is bigger)
-    n_steps = 1024
     n_minibatches = 4
     batch_size = (n_steps * n_envs) // n_minibatches
+
+    def lr_schedule(progress_remaining: float) -> float:
+        """Linear decay from 3e-4 → 5e-5."""
+        return 5e-5 + (3e-4 - 5e-5) * progress_remaining
 
     model = PPO(
         "MlpPolicy",
         vec_env,
         n_steps=n_steps,
         batch_size=batch_size,
-        n_epochs=8,
-        learning_rate=3e-4,
-        gamma=0.995,
+        n_epochs=10,
+        learning_rate=lr_schedule,
+        gamma=0.99,
         gae_lambda=0.95,
         ent_coef=0.005,
         clip_range=0.2,
-        vf_coef=1.0,
-        max_grad_norm=1.0,
-        device="cuda",
+        vf_coef=0.5,
+        max_grad_norm=0.5,
+        device="cpu",
         policy_kwargs=dict(
-            net_arch=dict(pi=[256, 256], vf=[256, 256]),
+            net_arch=dict(pi=[256, 256, 128], vf=[256, 256, 128]),
             activation_fn=nn.Tanh,
         ),
         verbose=sb3_verbose,
@@ -158,7 +172,7 @@ def main() -> None:
         action=argparse.BooleanOptionalAction,
         default=True,
     )
-    parser.add_argument("--save-video-every", type=int, default=100_000)
+    parser.add_argument("--save-video-every", type=int, default=2_000_000)
     parser.add_argument(
         "--progress-bar",
         action=argparse.BooleanOptionalAction,

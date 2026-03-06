@@ -99,7 +99,7 @@ def make_crazyflie_reach_dense_stable_cfg() -> CrazyflieTaskConfig:
 # ---------- Obstacle-avoidance reach profiles ----------
 
 def make_crazyflie_obstacle_cfg() -> CrazyflieTaskConfig:
-    """Default Crazyflie obstacle-avoidance reach profile."""
+    """Default Crazyflie wall-maze obstacle-avoidance reach profile."""
     return CrazyflieTaskConfig(
         model_path=_DEFAULT_MODEL,
         actuator_profile="crazyflie",
@@ -108,11 +108,24 @@ def make_crazyflie_obstacle_cfg() -> CrazyflieTaskConfig:
 
 
 def make_crazyflie_obstacle_dense_stable_cfg() -> CrazyflieTaskConfig:
-    """Stable baseline profile for PPO obstacle-avoidance training."""
+    """Stable baseline profile for PPO wall-maze training.
+
+    Five-component reward, each sub-component normalised to ~[-1, +1]:
+    * R_progress — distance shaping + alignment + approach bonus
+    * R_obstacle — worst-ray penalty (normalised zones)
+    * R_energy   — thrust² + balance + velocity + acceleration
+    * R_stability — angular vel + tilt + jerk (all clamped)
+    * R_task     — goal bonus (+10 + time), collision (−10), timeout (−5)
+
+    Total ≈ 5·R_progress + 0.5·R_obstacle + 0.2·R_energy
+          + 0.3·R_stability + 1·R_task
+
+    Per-step reward at stable hover toward goal ≈ +1 to +3.
+    """
     return CrazyflieTaskConfig(
         model_path=_DEFAULT_MODEL,
         actuator_profile="crazyflie",
-        time_limit=800,
+        time_limit=1200,
         env_kwargs={
             "observation_mode": "state_estimate",
             "n_substeps": 10,
@@ -123,18 +136,39 @@ def make_crazyflie_obstacle_dense_stable_cfg() -> CrazyflieTaskConfig:
             "goal_z_range": (0.20, 0.65),
             "reach_threshold": 0.06,
             "reach_hold_steps": 15,
-            "n_obstacle_slots": 12,
-            "n_obstacles_range": (4, 10),
-            "n_blocker_obstacles": 2,
-            "obstacle_goal_clearance": 0.0,
-            "obstacle_z_extra_range": 0.10,
+            # -- wall-maze layout --
+            "n_wall_slots": 12,
+            "n_barriers": (2, 3),
+            "gap_width": 0.22,
+            "partial_wall_prob": 0.30,
+            "wall_spawn_clearance": 0.20,
+            # Randomize per reset for better generalization.
+            "fixed_layout": False,
+            "ceiling_height": 0.75,
+            "terminate_on_goal": False,
+            # -- rangefinder --
             "rangefinder_mode": "lidar",
             "n_lidar_rays": 16,
-            "rangefinder_max_range": 2.0,
+            "rangefinder_max_range": 1.0,
             "rangefinder_noise_std": 0.02,
-            "obstacle_safety_margin": 0.15,
-            "obstacle_collision_penalty": 5.0,
-            "obstacle_proximity_coeff": 0.3,
+            # -- reward weights --
+            "w_progress": 5.0,
+            "w_obstacle": 0.5,
+            "w_energy": 0.2,
+            "w_stability": 0.3,
+            "w_task": 1.0,
+            # -- reward thresholds --
+            "goal_bonus": 10.0,
+            "time_bonus_max": 5.0,
+            "collision_penalty": 20.0,
+            "timeout_penalty": 5.0,
+            "v_optimal": 0.5,
+            "v_max": 2.0,
+            "a_max": 15.0,
+            # -- obstacle zones (normalised fractions of rangefinder range) --
+            "obstacle_collision_zone": 0.08,
+            "obstacle_danger_zone": 0.25,
+            "obstacle_warning_zone": 0.50,
         },
     )
 
