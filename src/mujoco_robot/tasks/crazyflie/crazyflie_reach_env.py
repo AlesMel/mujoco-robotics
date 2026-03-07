@@ -555,8 +555,8 @@ class CrazyflieReachEnv:
         voltage_scale = float(np.clip(0.78 + 0.22 * self.battery_soc, 0.0, 1.0))
         omega_des = cmd_norm * self.max_motor_omega * voltage_scale
 
-        alpha = self.dt_control / self.tau_motor
-        self.motor_omega += alpha * (omega_des - self.motor_omega)
+        decay = math.exp(-self.dt_control / self.tau_motor)
+        self.motor_omega = omega_des + (self.motor_omega - omega_des) * decay
         self.motor_omega = np.clip(self.motor_omega, 0.0, self.max_motor_omega * voltage_scale)
 
         self._last_motor_cmd_norm = cmd_norm

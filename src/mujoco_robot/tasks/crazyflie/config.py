@@ -120,7 +120,7 @@ def make_crazyflie_obstacle_cfg() -> CrazyflieTaskConfig:
     return CrazyflieTaskConfig(
         model_path=_DEFAULT_MODEL,
         actuator_profile="crazyflie",
-        time_limit=800,
+        time_limit=1600,
     )
 
 
@@ -142,7 +142,7 @@ def make_crazyflie_obstacle_dense_stable_cfg() -> CrazyflieTaskConfig:
     return CrazyflieTaskConfig(
         model_path=_DEFAULT_MODEL,
         actuator_profile="crazyflie",
-        time_limit=1200,
+        time_limit=2000,
         env_kwargs={
             "observation_mode": "state_estimate",
             "n_substeps": 10,
@@ -206,7 +206,7 @@ def make_crazyflie_obstacle_skrl_stable_cfg() -> CrazyflieTaskConfig:
     return CrazyflieTaskConfig(
         model_path=_DEFAULT_MODEL,
         actuator_profile="crazyflie",
-        time_limit=1200,
+        time_limit=2000,
         env_kwargs={
             "observation_mode": "state_estimate",
             "n_substeps": 10,
@@ -271,7 +271,7 @@ def make_crazyflie_obstacle_fast_cfg() -> CrazyflieTaskConfig:
     return CrazyflieTaskConfig(
         model_path=_DEFAULT_MODEL,
         actuator_profile="crazyflie",
-        time_limit=1200,
+        time_limit=2000,
         env_kwargs={
             "observation_mode": "state_estimate",
             "n_substeps": 5,
