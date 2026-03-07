@@ -505,9 +505,12 @@ class CrazyflieObstacleEnv(CrazyflieReachEnv):
         """Return True if any drone geom is in contact with a wall geom,
         OR if any horizontal rangefinder ray detects an obstacle closer
         than 2 cm (proximity fallback for tunnelling prevention)."""
-        # 1) MuJoCo contact-pair check
+        # 1) MuJoCo contact-pair check (c.dist <= 0 means actual penetration;
+        #    positive dist means geoms are within geom margin but not touching)
         for i in range(self.data.ncon):
             c = self.data.contact[i]
+            if c.dist > 0:
+                continue  # within margin zone but not actually touching
             g1, g2 = int(c.geom1), int(c.geom2)
             if (
                 (g1 in self._drone_geom_ids and g2 in self._wall_geom_ids)
