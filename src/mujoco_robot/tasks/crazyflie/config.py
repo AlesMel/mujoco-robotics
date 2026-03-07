@@ -27,6 +27,63 @@ OBSTACLE_GOAL_POOL = [
     ( 0.40, -0.40, 0.55),   # diagonal right-bottom, high
 ]
 
+# ---------------------------------------------------------------------------
+# Static maze layout — 11 wall segments across 4 barriers.
+#
+# Arena: xy in [-0.55, 0.55], ceiling at 0.75 m.  Spawn at (0, 0, ~0.28).
+# All "pos" and "size" values are MuJoCo half-extents.
+#
+#   Barrier A  Y-aligned at x = -0.27   fly-OVER gap  →  LEFT zone
+#   Barrier B  X-aligned at y = +0.25   fly-UNDER gap →  TOP zone
+#   Barrier C  Y-aligned at x = +0.26   CLEAN gap     →  RIGHT zone
+#   Barrier D  X-aligned at y = -0.25   fly-OVER gap  →  BOTTOM zone
+#
+# Skills covered: climb-over (A, D), squeeze-under (B), pure lateral (C),
+# altitude-then-navigate and navigate-then-altitude combinations.
+# ---------------------------------------------------------------------------
+STATIC_MAZE_WALLS = [
+    # --- Barrier A : Y-aligned at x = -0.27 ---
+    # Gap at y in [-0.11, +0.11].  Fly-over obstacle (wall top at 0.30 m):
+    # drone must climb above 0.30 m before entering the gap.
+    {"pos": [-0.27, -0.305, 0.375], "size": [0.015, 0.195, 0.375], "variant": "full"},
+    {"pos": [-0.27,  0.000, 0.150], "size": [0.015, 0.090, 0.150], "variant": "fly_over"},
+    {"pos": [-0.27,  0.305, 0.375], "size": [0.015, 0.195, 0.375], "variant": "full"},
+    # --- Barrier B : X-aligned at y = +0.25 ---
+    # Gap at x in [-0.11, +0.11].  Fly-under obstacle (wall bottom at 0.40 m):
+    # drone must descend below 0.40 m before entering the gap.
+    {"pos": [-0.305,  0.25, 0.375], "size": [0.195, 0.015, 0.375], "variant": "full"},
+    {"pos": [ 0.000,  0.25, 0.550], "size": [0.090, 0.015, 0.150], "variant": "fly_under"},
+    {"pos": [ 0.305,  0.25, 0.375], "size": [0.195, 0.015, 0.375], "variant": "full"},
+    # --- Barrier C : Y-aligned at x = +0.26 ---
+    # Clean gap at y in [-0.18, +0.04].  No partial wall — pure lateral nav.
+    {"pos": [0.26, -0.340, 0.375], "size": [0.015, 0.160, 0.375], "variant": "full"},
+    {"pos": [0.26,  0.270, 0.375], "size": [0.015, 0.230, 0.375], "variant": "full"},
+    # --- Barrier D : X-aligned at y = -0.25 ---
+    # Gap at x in [-0.09, +0.13].  Fly-over obstacle (wall top at 0.30 m).
+    {"pos": [-0.295, -0.25, 0.375], "size": [0.205, 0.015, 0.375], "variant": "full"},
+    {"pos": [ 0.020, -0.25, 0.150], "size": [0.090, 0.015, 0.150], "variant": "fly_over"},
+    {"pos": [ 0.315, -0.25, 0.375], "size": [0.185, 0.015, 0.375], "variant": "full"},
+]
+
+# Static goal pool — two goals per barrier zone (mid + high/low) plus a
+# ceiling hover in the centre.  Each goal trains a distinct skill.
+STATIC_GOAL_POOL = [
+    # LEFT zone  (Barrier A, fly-over gap — climb to z > 0.30 m first)
+    (-0.43,  0.00, 0.40),   # A-mid : fly over obstacle, hold mid altitude
+    (-0.43,  0.00, 0.60),   # A-high: fly over obstacle, then climb high
+    # TOP zone   (Barrier B, fly-under gap — descend to z < 0.40 m first)
+    ( 0.00,  0.43, 0.28),   # B-low : squeeze under elevated wall, stay low
+    ( 0.00,  0.43, 0.55),   # B-high: squeeze under elevated wall, then climb
+    # RIGHT zone (Barrier C, clean gap — pure lateral + altitude control)
+    ( 0.43, -0.07, 0.40),   # C-mid : centre of gap, mid altitude
+    ( 0.43, -0.07, 0.25),   # C-low : centre of gap, low altitude
+    # BOTTOM zone(Barrier D, fly-over gap — climb to z > 0.30 m first)
+    ( 0.00, -0.43, 0.40),   # D-mid : fly over obstacle, hold mid altitude
+    ( 0.00, -0.43, 0.55),   # D-high: fly over obstacle, then climb
+    # CENTER     (no barriers — pure altitude challenge near ceiling)
+    ( 0.00,  0.00, 0.65),   # centre-top: reach near-ceiling altitude
+]
+
 
 @dataclass
 class CrazyflieTaskConfig:
@@ -319,6 +376,68 @@ def make_crazyflie_obstacle_fast_cfg() -> CrazyflieTaskConfig:
     )
 
 
+def make_crazyflie_obstacle_static_cfg() -> CrazyflieTaskConfig:
+    """Fixed 4-barrier maze with a static goal pool.
+
+    The maze never changes between episodes — the agent must generalise
+    within one layout rather than across random ones.  All 9 goals are
+    drawn from :data:`STATIC_GOAL_POOL`, cycling in shuffled order.
+
+    Barrier layout (see :data:`STATIC_MAZE_WALLS` for exact geometry):
+
+    * **A** Y-aligned x = -0.27  fly-OVER gap → LEFT zone
+    * **B** X-aligned y = +0.25  fly-UNDER gap → TOP zone
+    * **C** Y-aligned x = +0.26  clean gap → RIGHT zone
+    * **D** X-aligned y = -0.25  fly-OVER gap → BOTTOM zone
+    """
+    return CrazyflieTaskConfig(
+        model_path=_DEFAULT_MODEL,
+        actuator_profile="crazyflie",
+        time_limit=2000,
+        env_kwargs={
+            "observation_mode": "state_estimate",
+            "n_substeps": 10,
+            "disturbance_sigma": 0.03,
+            "actuator_noise_std": 0.015,
+            "sensor_noise_scale": 1.0,
+            "goal_xy_range": 0.55,
+            "goal_z_range": (0.20, 0.65),
+            "reach_threshold": 0.06,
+            "reach_hold_steps": 15,
+            # -- static maze --
+            "n_wall_slots": 12,
+            "fixed_layout": True,
+            "maze_walls": STATIC_MAZE_WALLS,
+            "ceiling_height": 0.75,
+            "terminate_on_goal": False,
+            # -- rangefinder --
+            "rangefinder_mode": "lidar",
+            "n_lidar_rays": 16,
+            "rangefinder_max_range": 1.0,
+            "rangefinder_noise_std": 0.02,
+            # -- reward weights --
+            "w_progress": 4.0,
+            "w_obstacle": 1.0,
+            "w_energy": 0.2,
+            "w_stability": 0.3,
+            "w_task": 1.0,
+            # -- reward thresholds --
+            "goal_bonus": 10.0,
+            "time_bonus_max": 5.0,
+            "collision_penalty": 30.0,
+            "timeout_penalty": 5.0,
+            "v_optimal": 0.5,
+            "v_max": 2.0,
+            "a_max": 15.0,
+            "obstacle_collision_zone": 0.08,
+            "obstacle_danger_zone": 0.30,
+            "obstacle_warning_zone": 0.60,
+            # -- static goal pool --
+            "goal_pool": STATIC_GOAL_POOL,
+        },
+    )
+
+
 _CFG_FACTORIES: dict[str, Callable[[], CrazyflieTaskConfig]] = {
     "crazyflie_hover": make_crazyflie_hover_cfg,
     "crazyflie_hover_dense_stable": make_crazyflie_hover_dense_stable_cfg,
@@ -329,6 +448,7 @@ _CFG_FACTORIES: dict[str, Callable[[], CrazyflieTaskConfig]] = {
     "crazyflie_obstacle_dense_stable": make_crazyflie_obstacle_dense_stable_cfg,
     "crazyflie_obstacle_skrl_stable": make_crazyflie_obstacle_skrl_stable_cfg,
     "crazyflie_obstacle_fast": make_crazyflie_obstacle_fast_cfg,
+    "crazyflie_obstacle_static": make_crazyflie_obstacle_static_cfg,
 }
 
 

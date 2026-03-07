@@ -170,6 +170,7 @@ class CrazyflieObstacleEnv(CrazyflieReachEnv):
         partial_wall_prob: float = 0.30,
         wall_spawn_clearance: float = 0.20,
         fixed_layout: bool = True,
+        maze_walls: Optional[List[dict]] = None,
         ceiling_height: float = 0.75,
         terminate_on_goal: bool = False,
         # ---- rangefinder parameters ----
@@ -208,6 +209,7 @@ class CrazyflieObstacleEnv(CrazyflieReachEnv):
         self._partial_wall_prob = float(np.clip(partial_wall_prob, 0.0, 1.0))
         self._wall_spawn_clearance = float(max(0.05, wall_spawn_clearance))
         self._fixed_layout = bool(fixed_layout)
+        self._maze_walls_input = maze_walls
         self._ceiling_height = float(max(0, ceiling_height))
         self._terminate_on_goal = bool(terminate_on_goal)
 
@@ -304,7 +306,18 @@ class CrazyflieObstacleEnv(CrazyflieReachEnv):
 
         # ---- Fixed maze layout (generated once in __init__) --------------
         self._barrier_specs: list[dict] = []
-        if self._fixed_layout:
+        if self._maze_walls_input is not None:
+            # Explicit static wall list provided — convert to numpy and lock in.
+            self._fixed_layout = True
+            self._fixed_maze_walls = [
+                {
+                    "pos": np.array(w["pos"], dtype=np.float64),
+                    "size": np.array(w["size"], dtype=np.float64),
+                    "variant": w["variant"],
+                }
+                for w in self._maze_walls_input
+            ]
+        elif self._fixed_layout:
             self._fixed_maze_walls = self._generate_maze()
         else:
             self._fixed_maze_walls = None
