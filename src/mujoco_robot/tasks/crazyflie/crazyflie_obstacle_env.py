@@ -173,6 +173,7 @@ class CrazyflieObstacleEnv(CrazyflieReachEnv):
         maze_walls: Optional[List[dict]] = None,
         ceiling_height: float = 0.75,
         terminate_on_goal: bool = False,
+        terminate_on_collision: bool = True,
         # ---- rangefinder parameters ----
         rangefinder_mode: str = "lidar",
         n_lidar_rays: int = 16,
@@ -212,6 +213,7 @@ class CrazyflieObstacleEnv(CrazyflieReachEnv):
         self._maze_walls_input = maze_walls
         self._ceiling_height = float(max(0, ceiling_height))
         self._terminate_on_goal = bool(terminate_on_goal)
+        self._terminate_on_collision = bool(terminate_on_collision)
 
         self._rangefinder_mode = str(rangefinder_mode)
         self._n_lidar_rays = int(max(1, n_lidar_rays))
@@ -1097,10 +1099,14 @@ class CrazyflieObstacleEnv(CrazyflieReachEnv):
         )
 
         # ---- Done ----
+        collision_terminates = (
+            self._terminate_on_collision
+            and (obstacle_collision or ceiling_collision)
+        )
         done = bool(
             crashed or out_of_bounds or excessive_tilt
             or battery_depleted or time_out
-            or obstacle_collision or ceiling_collision or terminated_on_goal
+            or collision_terminates or terminated_on_goal
         )
 
         info: Dict[str, float | bool | int] = {

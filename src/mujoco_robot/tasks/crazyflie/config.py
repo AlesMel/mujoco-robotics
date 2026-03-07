@@ -312,6 +312,80 @@ def make_crazyflie_obstacle_skrl_stable_cfg() -> CrazyflieTaskConfig:
     )
 
 
+def make_crazyflie_obstacle_ppo_stable_cfg() -> CrazyflieTaskConfig:
+    """PPO-optimised profile that eliminates the wild eval-return oscillation.
+
+    Key changes vs ``crazyflie_obstacle_skrl_stable``:
+
+    * **Sparse reward scale tamed** — ``collision_penalty`` 30 → 10,
+      ``goal_bonus`` 10 → 5, ``time_bonus_max`` 5 → 2, ``timeout_penalty``
+      5 → 2.  The sparse magnitudes are now within ~5× of the per-step
+      shaping signal instead of 30×, so VecNormalize reward statistics stay
+      stable.
+    * **Collision is NOT terminal** — ``terminate_on_collision`` = False.
+      The penalty is still applied but the episode continues, eliminating
+      the bimodal (crash-vs-success) return distribution that drives
+      oscillation.
+    * **Easier initial layout** — ``n_barriers`` (1, 2) and ``gap_width``
+      0.28 (vs 0.22) give the agent more room to learn navigation before
+      the task becomes hard.
+    * ``w_obstacle`` raised 1.0 → 1.5 to compensate for the softer
+      collision penalty — the per-step rangefinder shaping carries more
+      weight.
+    """
+    return CrazyflieTaskConfig(
+        model_path=_DEFAULT_MODEL,
+        actuator_profile="crazyflie",
+        time_limit=2000,
+        env_kwargs={
+            "observation_mode": "state_estimate",
+            "n_substeps": 10,
+            "disturbance_sigma": 0.03,
+            "actuator_noise_std": 0.015,
+            "sensor_noise_scale": 1.0,
+            "goal_xy_range": 0.55,
+            "goal_z_range": (0.20, 0.65),
+            "reach_threshold": 0.06,
+            "reach_hold_steps": 15,
+            # -- wall-maze layout (easier) --
+            "n_wall_slots": 12,
+            "n_barriers": (1, 2),
+            "gap_width": 0.28,
+            "partial_wall_prob": 0.25,
+            "wall_spawn_clearance": 0.20,
+            "fixed_layout": False,
+            "ceiling_height": 0.75,
+            "terminate_on_goal": False,
+            "terminate_on_collision": False,
+            # -- rangefinder --
+            "rangefinder_mode": "lidar",
+            "n_lidar_rays": 16,
+            "rangefinder_max_range": 1.0,
+            "rangefinder_noise_std": 0.02,
+            # -- reward weights --
+            "w_progress": 4.0,
+            "w_obstacle": 1.5,
+            "w_energy": 0.2,
+            "w_stability": 0.3,
+            "w_task": 1.0,
+            # -- reward thresholds (tamed sparse magnitudes) --
+            "goal_bonus": 5.0,
+            "time_bonus_max": 2.0,
+            "collision_penalty": 10.0,
+            "timeout_penalty": 2.0,
+            "v_optimal": 0.5,
+            "v_max": 2.0,
+            "a_max": 15.0,
+            # -- obstacle zones --
+            "obstacle_collision_zone": 0.08,
+            "obstacle_danger_zone": 0.30,
+            "obstacle_warning_zone": 0.60,
+            # -- structured goal pool --
+            "goal_pool": OBSTACLE_GOAL_POOL,
+        },
+    )
+
+
 def make_crazyflie_obstacle_fast_cfg() -> CrazyflieTaskConfig:
     """Fast iteration profile — halved substeps and lidar rays.
 
@@ -447,6 +521,7 @@ _CFG_FACTORIES: dict[str, Callable[[], CrazyflieTaskConfig]] = {
     "crazyflie_obstacle": make_crazyflie_obstacle_cfg,
     "crazyflie_obstacle_dense_stable": make_crazyflie_obstacle_dense_stable_cfg,
     "crazyflie_obstacle_skrl_stable": make_crazyflie_obstacle_skrl_stable_cfg,
+    "crazyflie_obstacle_ppo_stable": make_crazyflie_obstacle_ppo_stable_cfg,
     "crazyflie_obstacle_fast": make_crazyflie_obstacle_fast_cfg,
     "crazyflie_obstacle_static": make_crazyflie_obstacle_static_cfg,
 }

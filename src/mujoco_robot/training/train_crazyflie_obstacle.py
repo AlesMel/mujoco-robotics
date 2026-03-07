@@ -26,7 +26,7 @@ from mujoco_robot.training.callbacks import (
 )
 
 
-DEFAULT_CFG_NAME = "crazyflie_obstacle_skrl_stable"
+DEFAULT_CFG_NAME = "crazyflie_obstacle_ppo_stable"
 
 
 def train_crazyflie_obstacle_ppo(
@@ -91,8 +91,8 @@ def train_crazyflie_obstacle_ppo(
         vec_env = DummyVecEnv([make_env(0)])
     else:
         vec_env = SubprocVecEnv([make_env(i) for i in range(n_envs)])
-    vec_env = VecNormalize(vec_env, norm_obs=True, norm_reward=True, clip_obs=10.0)
-    n_steps = 2048
+    vec_env = VecNormalize(vec_env, norm_obs=True, norm_reward=True, clip_obs=10.0, clip_reward=10.0)
+    n_steps = 4096
 
     def make_eval_env_no_render():
         cfg = build_cfg(seed=None, render_mode=None)
