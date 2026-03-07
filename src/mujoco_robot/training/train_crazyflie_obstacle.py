@@ -21,6 +21,7 @@ from mujoco_robot.tasks import (
 )
 from mujoco_robot.training.callbacks import (
     BestEpisodeVideoCallback,
+    EvalMetricsCallback,
     RunDirCheckpointCallback,
 )
 
@@ -93,12 +94,23 @@ def train_crazyflie_obstacle_ppo(
     vec_env = VecNormalize(vec_env, norm_obs=True, norm_reward=True, clip_obs=10.0)
     n_steps = 2048
 
+    def make_eval_env_no_render():
+        cfg = build_cfg(seed=None, render_mode=None)
+        return Monitor(make_crazyflie_obstacle_gymnasium(cfg))
+
     env_name = f"crazyflie_obstacle_{cfg_name}".replace("/", "_")
     callbacks = [
         RunDirCheckpointCallback(
             env_name=env_name,
             vec_norm=vec_env,
             save_every_timesteps=500_000,
+        ),
+        EvalMetricsCallback(
+            make_eval_env=make_eval_env_no_render,
+            eval_every_timesteps=500_000,
+            vec_norm=vec_env,
+            deterministic=True,
+            verbose=1,
         ),
     ]
     if save_video:

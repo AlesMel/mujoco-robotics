@@ -309,8 +309,6 @@ class BestEpisodeVideoCallback(BaseCallback):
                 print(f"[video] saved eval episode to {fname} "
                       f"(return {ep_return:.3f}, fps={fps})")
 
-        self.logger.record("eval/ep_return", float(ep_return))
-
         if ep_return > self.best_return and frames:
             self.best_return = ep_return
             best_fname = self.video_dir / "best_episode_latest.mp4"
@@ -320,3 +318,104 @@ class BestEpisodeVideoCallback(BaseCallback):
             if self.verbose:
                 print(f"[video] new best return {ep_return:.3f}, "
                       f"updated {best_fname} (fps={fps})")
+
+
+class EvalMetricsCallback(BaseCallback):
+    """Runs a deterministic eval episode every *N* timesteps and logs metrics.
+
+    Logs to TensorBoard:
+    - ``eval/ep_return``   — episode cumulative reward
+    - ``eval/ep_len``      — episode length in steps
+    - ``eval/goals_reached`` — goals reached (from info, if available)
+
+    Parameters
+    ----------
+    make_eval_env : callable
+        Zero-arg factory returning a Gymnasium env (no render needed).
+    eval_every_timesteps : int
+        How often to run an eval episode.
+    vec_norm : VecNormalize | None
+        Training VecNormalize whose obs statistics are copied for eval.
+    deterministic : bool
+        Whether to use deterministic policy actions.
+    verbose : int
+    """
+
+    def __init__(
+        self,
+        make_eval_env: Callable[[], gymnasium.Env],
+        eval_every_timesteps: int = 500_000,
+        vec_norm: VecNormalize | None = None,
+        deterministic: bool = True,
+        verbose: int = 1,
+    ):
+        super().__init__(verbose)
+        self.make_eval_env = make_eval_env
+        self.eval_every_timesteps = max(1, eval_every_timesteps)
+        self.vec_norm = vec_norm
+        self.deterministic = deterministic
+        self._next_eval: int = 0
+
+    def _init_callback(self) -> None:
+        self._next_eval = self.eval_every_timesteps
+
+    def _on_step(self) -> bool:
+        if self.num_timesteps >= self._next_eval:
+            self._run_eval()
+            self._next_eval += self.eval_every_timesteps
+        return True
+
+    def _run_eval(self) -> None:
+        if self.vec_norm is not None:
+            raw = DummyVecEnv([self.make_eval_env])
+            env = VecNormalize(
+                raw,
+                training=False,
+                norm_obs=self.vec_norm.norm_obs,
+                norm_reward=False,
+                clip_obs=self.vec_norm.clip_obs,
+            )
+            env.obs_rms = self.vec_norm.obs_rms.copy()
+            if self.vec_norm.ret_rms is not None:
+                env.ret_rms = self.vec_norm.ret_rms.copy()
+        else:
+            env = DummyVecEnv([self.make_eval_env])
+
+        obs = env.reset()
+        if isinstance(obs, tuple):
+            obs = obs[0]
+
+        ep_return = 0.0
+        ep_len = 0
+        goals_reached = None
+        done = False
+        while not done:
+            action, _ = self.model.predict(obs, deterministic=self.deterministic)
+            step_out = env.step(action)
+            if len(step_out) == 5:
+                obs, reward, terminated, truncated, infos = step_out
+                rew = float(reward[0]) if isinstance(reward, np.ndarray) else float(reward)
+                done = bool(terminated[0] or truncated[0]) if isinstance(terminated, np.ndarray) else bool(terminated or truncated)
+                info = infos[0] if isinstance(infos, (list, tuple)) else infos
+            else:
+                obs, reward, dones, infos = step_out
+                rew = float(reward[0]) if isinstance(reward, np.ndarray) else float(reward)
+                done = bool(dones[0]) if isinstance(dones, np.ndarray) else bool(dones)
+                info = infos[0] if isinstance(infos, (list, tuple)) else infos
+
+            ep_return += rew
+            ep_len += 1
+            if isinstance(info, dict) and "goals_reached" in info:
+                goals_reached = info["goals_reached"]
+        env.close()
+
+        self.logger.record("eval/ep_return", ep_return)
+        self.logger.record("eval/ep_len", ep_len)
+        if goals_reached is not None:
+            self.logger.record("eval/goals_reached", int(goals_reached))
+
+        if self.verbose:
+            msg = f"[eval] step={self.num_timesteps:,}  return={ep_return:.1f}  len={ep_len}"
+            if goals_reached is not None:
+                msg += f"  goals={goals_reached}"
+            print(msg)
