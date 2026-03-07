@@ -309,6 +309,8 @@ class BestEpisodeVideoCallback(BaseCallback):
                 print(f"[video] saved eval episode to {fname} "
                       f"(return {ep_return:.3f}, fps={fps})")
 
+        self.logger.record("eval/ep_return", float(ep_return))
+
         if ep_return > self.best_return and frames:
             self.best_return = ep_return
             best_fname = self.video_dir / "best_episode_latest.mp4"
