@@ -179,12 +179,13 @@ class CrazyflieObstacleEnv(CrazyflieReachEnv):
         n_lidar_rays: int = 16,
         rangefinder_max_range: float = 1.0,
         rangefinder_noise_std: float = 0.02,
-        # ---- reward weights (5-component) ----
+        # ---- reward weights (5-component + yaw alignment) ----
         w_progress: float = 5.0,
         w_obstacle: float = 0.5,
         w_energy: float = 0.2,
         w_stability: float = 0.3,
         w_task: float = 1.0,
+        w_yaw: float = 0.5,
         # ---- reward thresholds ----
         goal_bonus: float = 10.0,
         time_bonus_max: float = 5.0,
@@ -225,6 +226,7 @@ class CrazyflieObstacleEnv(CrazyflieReachEnv):
         self._w_energy = float(w_energy)
         self._w_stability = float(w_stability)
         self._w_task = float(w_task)
+        self._w_yaw = float(w_yaw)
         self._goal_bonus = float(max(0, goal_bonus))
         self._time_bonus_max = float(max(0, time_bonus_max))
         self._collision_penalty = float(max(0, collision_penalty))
@@ -833,8 +835,8 @@ class CrazyflieObstacleEnv(CrazyflieReachEnv):
     # ==================================================================
     @property
     def observation_dim(self) -> int:
-        # Parent obs + rangefinder(N)
-        return super().observation_dim + self._n_rf_total
+        # Parent obs + yaw alignment (cos, sin) + rangefinder(N)
+        return super().observation_dim + 2 + self._n_rf_total
 
     def reset(self, seed: Optional[int] = None) -> np.ndarray:
         # Parent reset: spawns drone, samples goal, clears odom, etc.
@@ -866,14 +868,29 @@ class CrazyflieObstacleEnv(CrazyflieReachEnv):
         return self._observe()
 
     def _observe(self) -> np.ndarray:
-        """Parent obs + rangefinder."""
+        """Parent obs + yaw alignment (cos/sin) + rangefinder."""
         base_obs = super()._observe()
+
+        # Yaw alignment: angle from drone forward (body-X) to horizontal goal direction.
+        # Represented as (cos, sin) to avoid angle wrapping discontinuities.
+        pos = self.data.xpos[self.cf_body_id].copy()
+        quat = self.data.xquat[self.cf_body_id].copy()
+        goal_xy = (self._goal_pos - pos)[:2]
+        goal_dist_xy = float(np.linalg.norm(goal_xy))
+        if goal_dist_xy > 0.05:
+            goal_yaw = math.atan2(goal_xy[1], goal_xy[0])
+            drone_yaw = self._quat_yaw(quat)
+            yaw_err = ((goal_yaw - drone_yaw + math.pi) % (2 * math.pi)) - math.pi
+        else:
+            yaw_err = 0.0
+        yaw_obs = np.array([math.cos(yaw_err), math.sin(yaw_err)], dtype=np.float32)
+
         if self._cached_rangefinder is None:
             rf = self._compute_rangefinder()
         else:
             rf = self._cached_rangefinder
             self._cached_rangefinder = None
-        return np.concatenate([base_obs, rf]).astype(np.float32)
+        return np.concatenate([base_obs, yaw_obs, rf]).astype(np.float32)
 
     # ==================================================================
     #  Reward
@@ -1089,6 +1106,20 @@ class CrazyflieObstacleEnv(CrazyflieReachEnv):
 
         R_task = R_success + R_time_bonus + R_collision + R_timeout
 
+        # ==================== 6. R_yaw_align  (range ~ [-1, +1]) ============
+        # Reward facing the goal in the horizontal plane.
+        # body-X is the drone's forward axis (front in multi_ranger, FPV camera).
+        # cos(yaw_err) = +1 when facing goal, -1 when facing away.
+        goal_xy = (self._goal_pos - pos)[:2]
+        goal_dist_xy = float(np.linalg.norm(goal_xy))
+        if goal_dist_xy > 0.05:
+            goal_yaw = math.atan2(goal_xy[1], goal_xy[0])
+            drone_yaw = self._quat_yaw(quat)
+            yaw_err = ((goal_yaw - drone_yaw + math.pi) % (2 * math.pi)) - math.pi
+        else:
+            yaw_err = 0.0
+        R_yaw_align = math.cos(yaw_err)
+
         # ==================== Total ====================
         reward = (
             self._w_progress * R_progress
@@ -1096,6 +1127,7 @@ class CrazyflieObstacleEnv(CrazyflieReachEnv):
             + self._w_energy * R_energy
             + self._w_stability * R_stability
             + self._w_task * R_task
+            + self._w_yaw * R_yaw_align
         )
 
         # ---- Done ----
@@ -1153,6 +1185,8 @@ class CrazyflieObstacleEnv(CrazyflieReachEnv):
             "stability_factor": float(np.clip(1.0 + R_stability, 0.0, 1.0)),
             "vel_toward_goal": float(vel_toward_goal),
             "obstacle_proximity_penalty": float(R_obstacle_val),
+            "yaw_error_deg": float(math.degrees(yaw_err)),
+            "R_yaw_align": float(R_yaw_align),
         }
         return float(reward), done, info
 

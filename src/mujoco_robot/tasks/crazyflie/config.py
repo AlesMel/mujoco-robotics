@@ -317,6 +317,12 @@ def make_crazyflie_obstacle_ppo_stable_cfg() -> CrazyflieTaskConfig:
 
     Key changes vs ``crazyflie_obstacle_skrl_stable``:
 
+    * **Fixed maze layout** — uses :data:`STATIC_MAZE_WALLS` (4 barriers
+      with fly-over, fly-under, and clean-gap variants).  Episode-to-
+      episode variance comes entirely from the shuffled
+      :data:`STATIC_GOAL_POOL` (9 goals across all maze zones), not from
+      random wall placement.  This removes the dominant source of return
+      oscillation.
     * **Sparse reward scale tamed** — ``collision_penalty`` 30 → 10,
       ``goal_bonus`` 10 → 5, ``time_bonus_max`` 5 → 2, ``timeout_penalty``
       5 → 2.  The sparse magnitudes are now within ~5× of the per-step
@@ -326,9 +332,6 @@ def make_crazyflie_obstacle_ppo_stable_cfg() -> CrazyflieTaskConfig:
       The penalty is still applied but the episode continues, eliminating
       the bimodal (crash-vs-success) return distribution that drives
       oscillation.
-    * **Easier initial layout** — ``n_barriers`` (1, 2) and ``gap_width``
-      0.28 (vs 0.22) give the agent more room to learn navigation before
-      the task becomes hard.
     * ``w_obstacle`` raised 1.0 → 1.5 to compensate for the softer
       collision penalty — the per-step rangefinder shaping carries more
       weight.
@@ -347,13 +350,10 @@ def make_crazyflie_obstacle_ppo_stable_cfg() -> CrazyflieTaskConfig:
             "goal_z_range": (0.20, 0.65),
             "reach_threshold": 0.06,
             "reach_hold_steps": 15,
-            # -- wall-maze layout (easier) --
+            # -- fixed maze layout (consistent across episodes) --
             "n_wall_slots": 12,
-            "n_barriers": (1, 2),
-            "gap_width": 0.28,
-            "partial_wall_prob": 0.25,
-            "wall_spawn_clearance": 0.20,
-            "fixed_layout": False,
+            "fixed_layout": True,
+            "maze_walls": STATIC_MAZE_WALLS,
             "ceiling_height": 0.75,
             "terminate_on_goal": False,
             "terminate_on_collision": False,
@@ -380,8 +380,8 @@ def make_crazyflie_obstacle_ppo_stable_cfg() -> CrazyflieTaskConfig:
             "obstacle_collision_zone": 0.08,
             "obstacle_danger_zone": 0.30,
             "obstacle_warning_zone": 0.60,
-            # -- structured goal pool --
-            "goal_pool": OBSTACLE_GOAL_POOL,
+            # -- static goal pool (9 goals across all 4 zones + centre) --
+            "goal_pool": STATIC_GOAL_POOL,
         },
     )
 
